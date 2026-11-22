@@ -176,8 +176,11 @@ pub enum Message {
 
     /// A tab of the game's settings page was chosen, by its title.
     SettingsTabSelected(Option<String>),
-    /// A WMMT3 setting was given a value (`None` when its control was emptied).
+    /// A WMMT3 setting was given a value (`None` when its control was emptied, or its
+    /// dialog cancelled).
     Wmmt3SettingChanged(&'static str, Option<String>),
+    /// Choose the folder or file of a WMMT3 path setting in a dialog, by its key.
+    Wmmt3BrowsePath(&'static str),
     /// Capture a WMMT3 button binding from the device.
     Wmmt3CaptureStart(&'static str),
     /// A WMMT3 button binding was captured: epoch, setting key, value.

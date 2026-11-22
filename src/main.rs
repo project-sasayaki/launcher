@@ -16,6 +16,7 @@ mod db;
 mod detect;
 mod file_util;
 mod filedialog;
+mod font_file;
 mod games;
 mod i18n;
 mod icf;

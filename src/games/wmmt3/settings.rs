@@ -52,6 +52,12 @@ pub enum Kind {
     Choice(&'static [(&'static str, Label)]),
     /// Free text.
     Text,
+    /// A folder, typed or chosen in a folder dialog.
+    Folder,
+    /// A font file, typed or chosen in a file dialog. The family name the file gives its font
+    /// is written into the setting with the key `name` (a `Kind::Text` setting), the name a
+    /// program asks Windows for once it has loaded the file.
+    FontFile { name: &'static str },
     /// A gamepad button by its XInput name, or `none`.
     XinputButton,
     /// A DirectInput button by its number from 1, or `0` for none.
@@ -270,6 +276,18 @@ pub const SYSTEM_SECTIONS: &[Section] = &[
         settings: &[setting("card_auto_insert", "page_system.auto_card_insert", Kind::Toggle, "false")],
     },
     Section {
+        title: "wmmt3.section_card_print",
+        input_mode: None,
+        switch: None,
+        settings: &[
+            // A folder of blank card images: each new card gets one at random and keeps it.
+            // KittenTools also takes a single image here, which can be typed in.
+            setting("print_template", "wmmt3.print_template", Kind::Folder, ""),
+            setting("print_font_file", "wmmt3.print_font_file", Kind::FontFile { name: "print_font_name" }, ""),
+            setting("print_font_name", "wmmt3.print_font_name", Kind::Text, "MS Gothic"),
+        ],
+    },
+    Section {
         title: "wmmt3.section_coins",
         input_mode: None,
         switch: None,
@@ -431,7 +449,7 @@ mod tests {
                 Kind::DinputButton => s.default.parse::<u32>().is_ok(),
                 Kind::Axis { .. } => crate::rawinput::DINPUT_AXES.contains(&s.default),
                 Kind::Key => KEYS.iter().any(|(v, _)| *v == s.default),
-                Kind::Text | Kind::Device { .. } => true,
+                Kind::Text | Kind::Folder | Kind::FontFile { .. } | Kind::Device { .. } => true,
             };
             assert!(ok, "{}: default {:?} does not fit its kind", s.key, s.default);
         }
@@ -443,6 +461,16 @@ mod tests {
             if let Some(Condition::On(key) | Condition::Off(key)) = &s.shown_if {
                 let switch = find(key).unwrap_or_else(|| panic!("{}: no setting {key}", s.key));
                 assert!(matches!(switch.kind, Kind::Toggle), "{}: {key} is not a switch", s.key);
+            }
+        }
+    }
+
+    #[test]
+    fn font_files_name_a_text_setting() {
+        for s in all() {
+            if let Kind::FontFile { name } = &s.kind {
+                let target = find(name).unwrap_or_else(|| panic!("{}: no setting {name}", s.key));
+                assert!(matches!(target.kind, Kind::Text), "{}: {name} is not a text setting", s.key);
             }
         }
     }

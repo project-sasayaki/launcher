@@ -2,10 +2,14 @@
 //! Wangan Midnight Maximum Tune 3 / 3DX / 3DX+. They are drawn from the table in
 //! `games::wmmt3::settings`, one row per setting, its control chosen by the setting's kind.
 
+use std::path::Path;
+
 use windows_reactor::*;
 
 use rust_i18n::t;
 
+use crate::filedialog;
+use crate::font_file;
 use crate::games::wmmt3::settings::{self, KEYS, Kind, Label, Section, Setting, XINPUT_BUTTONS};
 use crate::rawinput;
 use crate::reactor_app::Launcher;
@@ -165,6 +169,22 @@ impl Launcher {
                 .on_text_changed(context.callback(move |text: String| changed(Some(text))))
                 .min_width(220.0)
                 .into(),
+            Kind::Folder | Kind::FontFile { .. } => {
+                let path: View = TextBox::new()
+                    .text(value)
+                    .on_text_changed(context.callback(move |text: String| changed(Some(text))))
+                    .min_width(320.0)
+                    .into();
+                let browse: View = Button::new()
+                    .on_click(context.message(Message::Wmmt3BrowsePath(key)))
+                    .content(t!("wmmt3.browse").to_string())
+                    .into();
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(8.0)
+                    .children((path, browse))
+                    .into()
+            }
         };
         settings_row(SymbolIcon::new().symbol(Symbol::Setting).into(), &t!(setting.label), control)
     }
@@ -202,8 +222,15 @@ impl Launcher {
     /// Handles the messages of the WMMT3 tabs; hands the others back.
     pub(in crate::reactor_app) fn handle_wmmt3(&mut self, message: Message, context: &ComponentContext<Self>) -> Option<Message> {
         match message {
-            Message::Wmmt3SettingChanged(key, Some(value)) => self.set_wmmt3(key, value),
+            Message::Wmmt3SettingChanged(key, Some(value)) => {
+                let font_name = font_name_for(key, &value);
+                self.set_wmmt3(key, value);
+                if let Some((name_key, name)) = font_name {
+                    self.set_wmmt3(name_key, name);
+                }
+            }
             Message::Wmmt3SettingChanged(_, None) => {}
+            Message::Wmmt3BrowsePath(key) => browse_wmmt3_path(key, context),
             Message::Wmmt3CaptureStart(key) => self.start_wmmt3_capture(key, context),
             Message::Wmmt3Captured(epoch, key, value) => {
                 if epoch == self.input_capture_gen {
@@ -289,6 +316,42 @@ impl Launcher {
             }
         });
     }
+}
+
+/// The font files a font file dialog offers.
+const FONT_FILES: &str = "*.ttf;*.ttc;*.otf";
+
+/// Opens the dialog a path setting calls for, titled with the setting's name; the folder or
+/// file chosen becomes its value.
+fn browse_wmmt3_path(key: &'static str, context: &ComponentContext<Launcher>) {
+    let Some(setting) = settings::find(key) else {
+        return;
+    };
+    let pick_folder = match setting.kind {
+        Kind::Folder => true,
+        Kind::FontFile { .. } => false,
+        _ => return,
+    };
+    let title = t!(setting.label).to_string();
+    let font_files = t!("wmmt3.font_files").to_string();
+    let all_files = t!("common.all_files").to_string();
+    context.spawn_background(move |_| {
+        let picked = if pick_folder {
+            filedialog::pick_folder(&title)
+        } else {
+            filedialog::pick_open_file(&[(&font_files, FONT_FILES), (&all_files, "*.*")], &title)
+        };
+        Message::Wmmt3SettingChanged(key, picked.map(|path| path.display().to_string()))
+    });
+}
+
+/// For a font file setting given `path`: the setting its font's name goes into, and the
+/// family name read from the file. `None` for any other setting, or a file without a name.
+fn font_name_for(key: &str, path: &str) -> Option<(&'static str, String)> {
+    let Kind::FontFile { name } = settings::find(key)?.kind else {
+        return None;
+    };
+    Some((name, font_file::family_name(Path::new(path))?))
 }
 
 /// The text of a choice.
