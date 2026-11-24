@@ -194,6 +194,63 @@ pub fn writer(path: &Path) -> Writer<'_> {
     }
 }
 
+/// The keys and values of a section, in the order of the file, with the keys as written.
+pub fn section_entries(ini: &Path, section: &str) -> Vec<(String, String)> {
+    let Ok(text) = fs::read_to_string(ini) else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    let mut in_section = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(name) = section_name(t) {
+            in_section = name.eq_ignore_ascii_case(section);
+        } else if in_section && !t.starts_with(';') {
+            if let Some((k, v)) = t.split_once('=') {
+                entries.push((k.trim().to_string(), v.trim().to_string()));
+            }
+        }
+    }
+    entries
+}
+
+/// Removes keys from a section: the `keys` named, or with `None` the whole section with its
+/// header. The rest of the file stays as it is.
+pub fn remove_entries(ini: &Path, section: &str, keys: Option<&[&str]>) -> io::Result<()> {
+    let Ok(text) = fs::read_to_string(ini) else {
+        return Ok(());
+    };
+    let mut out = String::new();
+    let mut in_section = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(name) = section_name(t) {
+            in_section = name.eq_ignore_ascii_case(section);
+            if in_section && keys.is_none() {
+                continue;
+            }
+        } else if in_section {
+            let removed = match keys {
+                None => true,
+                Some(keys) => t
+                    .split_once('=')
+                    .is_some_and(|(k, _)| keys.iter().any(|key| key.eq_ignore_ascii_case(k.trim()))),
+            };
+            if removed {
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    fs::write(ini, out)
+}
+
+/// The name of a section header line (`[name]`), or `None` for any other line.
+fn section_name(line: &str) -> Option<&str> {
+    line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')).map(str::trim)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +347,28 @@ mod tests {
         assert!(out.contains("adapter = abc\n"));
         assert!(out.contains("ip = 1.1.1.1\n"));
         assert!(out.contains("x = 1"));
+        fs::remove_file(&ini).ok();
+    }
+
+    #[test]
+    fn section_entries_keep_the_order_and_skip_comments() {
+        let ini = temp_ini("entries.ini");
+        fs::write(&ini, "[a]\nx = 1\n[input]\n; note\nKind = dinput\nratio = 128\n[b]\ny = 2\n").unwrap();
+        assert_eq!(
+            section_entries(&ini, "INPUT"),
+            vec![("Kind".to_string(), "dinput".to_string()), ("ratio".to_string(), "128".to_string())]
+        );
+        assert!(section_entries(&ini, "missing").is_empty());
+        fs::remove_file(&ini).ok();
+    }
+
+    #[test]
+    fn remove_entries_takes_out_keys_or_a_whole_section() {
+        let ini = temp_ini("remove.ini");
+        fs::write(&ini, "; top\n[system]\nkeychip = A\nloglevel = info\n[input]\nkind = dinput\n[vpn]\nconfig = c\n").unwrap();
+        remove_entries(&ini, "system", Some(&["LogLevel"])).unwrap();
+        remove_entries(&ini, "input", None).unwrap();
+        assert_eq!(fs::read_to_string(&ini).unwrap(), "; top\n[system]\nkeychip = A\n[vpn]\nconfig = c\n");
         fs::remove_file(&ini).ok();
     }
 }

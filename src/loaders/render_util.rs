@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::tf;
+use rust_i18n::t;
 
 pub(crate) struct Sections(Vec<(String, Vec<String>)>);
 
@@ -77,21 +77,11 @@ pub(crate) fn copy_tool_files(
     label: &str,
 ) -> Result<(), String> {
     let entries = fs::read_dir(tool_dir).map_err(|e| {
-        tf!(
-            "读取 {} 工具目录失败（{}）：{e}",
-            "Failed to read {} tool directory ({}): {e}",
-            label,
-            tool_dir.display()
-        )
+        t!("render_util.failed_to_read_tool_directory", label = label, tool_dir = tool_dir.display(), error = e).to_string()
     })?;
     for entry in entries {
         let entry = entry.map_err(|e| {
-            tf!(
-                "读取 {} 工具目录条目失败（{}）：{e}",
-                "Failed to read {} tool directory entry ({}): {e}",
-                label,
-                tool_dir.display()
-            )
+            t!("render_util.failed_to_read_tool_directory_entry", label = label, tool_dir = tool_dir.display(), error = e).to_string()
         })?;
         let Ok(ft) = entry.file_type() else {
             continue;
@@ -112,13 +102,7 @@ pub(crate) fn copy_tool_files(
             continue;
         }
         fs::copy(&src, &dst).map_err(|e| {
-            tf!(
-                "复制 {} 工具文件失败（{} → {}）：{e}",
-                "Failed to copy {} tool file ({} -> {}): {e}",
-                label,
-                src.display(),
-                dst.display()
-            )
+            t!("render_util.failed_to_copy_tool_file", label = label, src = src.display(), dst = dst.display(), error = e).to_string()
         })?;
     }
     Ok(())

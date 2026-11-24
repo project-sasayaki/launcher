@@ -3,6 +3,7 @@
   "games": [
     {
         "name": "InitialD Arcade Stage 4 JPN",
+        "release": "2007-02-21",
         "game_id": "SBML",
         "platform": "Lindbergh",
         "loader": "kitten",
@@ -27,6 +28,7 @@
     },
     {
         "name": "InitialD Arcade Stage 4 kai JPN",
+        "release": "2008-03-24",
         "game_id": "SBML",
         "platform": "Lindbergh",
         "loader": "kitten",
@@ -41,6 +43,7 @@
     },
     {
         "name": "InitialD Arcade Stage 5 JPN",
+        "release": "2009-02-25",
         "game_id": "SBQZ",
         "platform": "Lindbergh",
         "loader": "kitten",
@@ -60,6 +63,7 @@
     },
     {
         "name": "InitialD Arcade Stage 5 EXP 2.0",
+        "release": "2009-02-25",
         "game_id": "SBTS",
         "platform": "Lindbergh",
         "loader": "kitten",
@@ -74,6 +78,7 @@
     },
     {
         "name": "InitialD Arcade Stage 6AA JPN",
+        "release": "2011-03-03",
         "game_id": "SBUU",
         "platform": "RingEdge",
         "loader": "mice",
@@ -93,6 +98,7 @@
     },
     {
         "name": "InitialD Arcade Stage 6AA EXP",
+        "release": "2011-03-03",
         "game_id": "SBVW",
         "platform": "RingEdge",
         "loader": "mice",
@@ -107,6 +113,7 @@
     },
     {
         "name": "InitialD Arcade Stage 6AA CHN 全国对战版",
+        "release": "2011-03-03",
         "game_id": "SBWV",
         "platform": "RingEdge",
         "loader": "mice",
@@ -121,6 +128,7 @@
     },
     {
         "name": "InitialD Arcade Stage 7AAX JPN",
+        "release": "2012-11-28",
         "game_id": "SBYD",
         "platform": "RingEdge",
         "loader": "mice",
@@ -135,6 +143,7 @@
     },  
     {
         "name": "InitialD Arcade Stage 7AAX CHN 全国对战版",
+        "release": "2012-11-28",
         "game_id": "SBYY",
         "platform": "RingEdge",
         "loader": "mice",
@@ -149,6 +158,7 @@
     },    
     {
         "name": "InitialD Arcade Stage 8 JPN",
+        "release": "2014-07-17",
         "game_id": "SBZZ",
         "platform": "RingEdge",
         "loader": "mice",
@@ -173,6 +183,7 @@
     }, 
     {
         "name": "InitialD Arcade Stage 8 EXP",
+        "release": "2014-07-17",
         "game_id": "SDAL",
         "platform": "RingEdge",
         "loader": "mice",
@@ -187,6 +198,7 @@
     },
     {
         "name": "InitialD The Arcade Season 6",
+        "release": "2026-04-09",
         "game_id": "SDGT",
         "platform": "ALLS",
         "loader": "segatools",
@@ -199,6 +211,7 @@
     },
     {
         "name": "InitialD The Arcade Season 5",
+        "release": "2025-04-17",
         "game_id": "SDGT",
         "platform": "ALLS",
         "loader": "segatools",
@@ -211,6 +224,7 @@
     },
     {
         "name": "InitialD The Arcade Season 4",
+        "release": "2024-04-04",
         "game_id": "SDGT",
         "platform": "ALLS",
         "loader": "segatools",
@@ -223,6 +237,7 @@
     },
     {
         "name": "InitialD The Arcade Season 3",
+        "release": "2023-04-17",
         "game_id": "SDGT",
         "platform": "ALLS",
         "loader": "segatools",
@@ -238,6 +253,7 @@
     },
     {
         "name": "InitialD The Arcade Season 2",
+        "release": "2022-03-17",
         "game_id": "SDGT",
         "platform": "ALLS",
         "loader": "segatools",
@@ -250,6 +266,7 @@
     },
     {
         "name": "InitialD The Arcade Season 1",
+        "release": "2021-02-25",
         "game_id": "SDGT",
         "platform": "ALLS",
         "loader": "segatools",
@@ -262,6 +279,7 @@
     },
     {
         "name": "InitialD Arcade Stage Zero",
+        "release": "2017-03-07",
         "game_id": "SDDF",
         "platform": "Nu",
         "loader": "segatools",
@@ -274,6 +292,7 @@
     },
     {
         "name": "InitialD Arcade Stage Zero Ver.2",
+        "release": "2019-04-18",
         "game_id": "SDDF",
         "platform": "Nu",
         "loader": "segatools",
@@ -286,6 +305,7 @@
     },
     {
         "name": "InitialD Arcade Stage Zero CHN",
+        "release": "2017-03-07",
         "game_id": "SDER",
         "platform": "Nu",
         "loader": "segatools",
@@ -293,6 +313,115 @@
         "support_game": [
           {
               "version": "1.44.00"
+          }
+        ]
+    },
+    {
+        "name": "Wangan Midnight Maximum Tune 3 JPN",
+        "release": "2007-07-18",
+        "game_id": "WM3",
+        "platform": "System N2",
+        "image": "logo_wm3.png",
+        "loader": "kitten",
+        "in_store_battles": false,
+        "support_game": [
+          {
+              "crc": "0xcf5dde93",
+              "version": "A70"
+          }
+        ]
+    },
+    {
+        "name": "Wangan Midnight Maximum Tune 3 EXP",
+        "release": "2007-07-18",
+        "game_id": "WM3",
+        "platform": "System N2",
+        "image": "logo_wm3.png",
+        "loader": "kitten",
+        "in_store_battles": false,
+        "support_game": [
+          {
+              "crc": "0xec016afd",
+              "version": "A70"
+          }
+        ]
+    },
+    {
+        "name": "Wangan Midnight Maximum Tune 3DX JPN",
+        "release": "2008-12-16",
+        "game_id": "W3X",
+        "platform": "System N2",
+        "image": "logo_wm3dx.png",
+        "loader": "kitten",
+        "in_store_battles": false,
+        "support_game": [
+          {
+              "crc": "0xfa4b36bc",
+              "version": "C09"
+          }
+        ]
+    },
+    {
+        "name": "Wangan Midnight Maximum Tune 3DX EXP",
+        "release": "2008-12-16",
+        "game_id": "W3X",
+        "platform": "System N2",
+        "image": "logo_wm3dx.png",
+        "loader": "kitten",
+        "in_store_battles": false,
+        "support_game": [
+          {
+              "crc": "0xe47ddd0d",
+              "version": "A20"
+          },
+          {
+              "crc": "0x050db385",
+              "version": "C09"
+          }
+        ]
+    },
+    {
+        "name": "Wangan Midnight Maximum Tune 3DX+ JPN",
+        "release": "2010-03-04",
+        "game_id": "W3P",
+        "platform": "System N2",
+        "image": "logo_wm3dxplus.png",
+        "loader": "kitten",
+        "in_store_battles": false,
+        "support_game": [
+          {
+              "crc": "0x85a0e7ab",
+              "version": "B02"
+          }
+        ]
+    },
+    {
+        "name": "Wangan Midnight Maximum Tune 3DX+ EXP",
+        "release": "2010-03-04",
+        "game_id": "W3P",
+        "platform": "System N2",
+        "image": "logo_wm3dxplus.png",
+        "loader": "kitten",
+        "in_store_battles": false,
+        "support_game": [
+          {
+              "crc": "0x827c956b",
+              "version": "B02"
+          }
+        ]
+    },
+    {
+        "name": "Wangan Midnight Maximum Tune 3DX+ CHN",
+        "release": "2010-03-04",
+        "game_id": "W3P",
+        "platform": "System N2",
+        "image": "logo_wm3dxplus.png",
+        "loader": "kitten",
+        "in_store_battles": false,
+        "support_game": [
+          {
+              "crc": "0x4753d367",
+              "version": "A16"
           }
         ]
     }

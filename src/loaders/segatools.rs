@@ -1,13 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::mice::{format_ipv4, parse_cidr, write_atomic, RoomNetOverride};
-use crate::render_util::{deadzone_value, push_xi_button, Sections};
+use rust_i18n::t;
+
+use super::mice::{format_ipv4, parse_cidr, write_atomic, RoomNetOverride};
+use super::render_util::{deadzone_value, push_xi_button, Sections};
 use crate::storage::{
     CoinConfig, DPAD_CODE_BASE, GraphicsConfig, InputConfig, INPUT_RATIO_DEFAULT, NetworkConfig,
     SystemConfig,
 };
-use crate::tf;
 
 #[derive(Clone)]
 pub struct DeploySnapshot {
@@ -567,23 +568,15 @@ fn copy_if_changed(src: &Path, dest: &Path) -> Result<(), String> {
     }
     fs::copy(src, dest)
         .map(|_| ())
-        .map_err(|e| tf!("复制 {} 失败：{e}", "Failed to copy {}: {e}", src.display()))
+        .map_err(|e| t!("common.failed_to_copy", src = src.display(), error = e).to_string())
 }
 
 pub fn deploy(dir: &Path, tool_dir: &Path, dep: &DeploySnapshot) -> Result<(), String> {
     if !dir.is_dir() {
-        return Err(tf!(
-            "amdaemon 目录不存在：{}",
-            "amdaemon directory does not exist: {}",
-            dir.display()
-        ));
+        return Err(t!("segatools.amdaemon_directory_does_not_exist", dir = dir.display()).to_string());
     }
     if !tool_dir.is_dir() {
-        return Err(tf!(
-            "segatools 工具目录不存在：{}",
-            "segatools tool directory does not exist: {}",
-            tool_dir.display()
-        ));
+        return Err(t!("segatools.segatools_tool_directory_does_not", tool_dir = tool_dir.display()).to_string());
     }
     let kind = game_kind(dep.game_id.as_deref());
 
@@ -604,7 +597,7 @@ pub fn deploy(dir: &Path, tool_dir: &Path, dep: &DeploySnapshot) -> Result<(), S
     };
 
     let entries = fs::read_dir(tool_dir)
-        .map_err(|e| tf!("读取工具目录失败（{}）：{e}", "Failed to read tool directory ({}): {e}", tool_dir.display()))?;
+        .map_err(|e| t!("segatools.failed_to_read_tool_directory", tool_dir = tool_dir.display(), error = e).to_string())?;
     for e in entries.flatten() {
         let Ok(ft) = e.file_type() else { continue };
         if !ft.is_file() {
@@ -634,11 +627,7 @@ pub fn deploy(dir: &Path, tool_dir: &Path, dep: &DeploySnapshot) -> Result<(), S
     if kind == GameKind::Idac {
         let hook_json = sub_dir.join("config_hook.json");
         if !hook_json.is_file() {
-            return Err(tf!(
-                "segatools 工具目录缺少 idac\\config_hook.json（{}）",
-                "segatools tool directory is missing idac\\config_hook.json ({})",
-                hook_json.display()
-            ));
+            return Err(t!("segatools.segatools_tool_directory_is_missing", hook_json = hook_json.display()).to_string());
         }
         copy_if_changed(&hook_json, &dir.join("config_hook.json"))?;
     }
@@ -661,11 +650,7 @@ pub fn deploy(dir: &Path, tool_dir: &Path, dep: &DeploySnapshot) -> Result<(), S
         let d = dir.join(sub);
         if !d.is_dir() {
             fs::create_dir_all(&d).map_err(|e| {
-                tf!(
-                    "创建 {sub} 目录失败（{}）：{e}",
-                    "Failed to create {sub} directory ({}): {e}",
-                    d.display()
-                )
+                t!("segatools.failed_to_create_directory", sub = sub, d = d.display(), error = e).to_string()
             })?;
         }
     }
@@ -681,7 +666,7 @@ pub fn deploy(dir: &Path, tool_dir: &Path, dep: &DeploySnapshot) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mice::{format_ipv4, last_host, mask_of, parse_cidr};
+    use crate::loaders::mice::{format_ipv4, last_host, mask_of, parse_cidr};
 
     fn snapshot() -> DeploySnapshot {
         DeploySnapshot {
@@ -709,8 +694,8 @@ mod tests {
         assert!(text.contains("[indrun]\nenable = 1"));
         assert!(text.contains("[led15070]\nenable = 1"));
         assert!(text.contains("[ffb]\nenable = 1"));
-        assert!(!text.contains("[keychip]"), "未设置 keychip 时整节省略");
-        assert!(!text.contains("spike"), "无 spike 时不写 spike 键");
+        assert!(!text.contains("[keychip]"), "without a keychip the whole section is left out");
+        assert!(!text.contains("spike"), "without a spike file the spike key is not written");
 
         assert!(text.contains("[io4]\nrestrict = 128\n"));
 
@@ -726,7 +711,7 @@ mod tests {
         dep.coin.freeplay = Some(true);
         let text = render_segatools_ini(&dep, None);
         assert!(text.contains("id = A69E-01A88888888"));
-        assert!(text.contains("subnet = 192.168.100.0"), "subnet 只写基址不带 /前缀");
+        assert!(text.contains("subnet = 192.168.100.0"), "subnet is the base address without the /prefix");
         assert!(text.contains("region = 8"));
         assert!(text.contains("freeplay = 1"));
     }
@@ -739,22 +724,22 @@ mod tests {
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("[keychip]\ngameId = SDGT"),
-            "game_id 落 [keychip]，其余键未设时整节只有 gameId：\n{text}"
+            "game_id goes to [keychip]; with no other key set the section holds only gameId:\n{text}"
         );
 
         dep.system.keychip = Some("A69E-01A88888888".into());
         dep.net.ip = Some("192.168.100.0/24".into());
         let text = render_segatools_ini(&dep, None);
-        let keychip = text.split("[keychip]").nth(1).expect("应存在 [keychip] 节");
-        assert!(keychip.contains("gameId = SDGT"), "gameId 与序列号同节：\n{text}");
+        let keychip = text.split("[keychip]").nth(1).expect("the [keychip] section should exist");
+        assert!(keychip.contains("gameId = SDGT"), "gameId is in the same section as the serial:\n{text}");
         assert!(keychip.contains("id = A69E-01A88888888"));
         assert!(keychip.contains("subnet = 192.168.100.0"));
 
         let mut dep = snapshot();
         dep.game_id = Some("  ".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(!text.contains("gameId"), "空白 game_id 不写：\n{text}");
-        assert!(!text.contains("[keychip]"), "无键时整节省略：\n{text}");
+        assert!(!text.contains("gameId"), "a blank game_id is not written:\n{text}");
+        assert!(!text.contains("[keychip]"), "without keys the whole section is left out:\n{text}");
     }
 
     #[test]
@@ -770,20 +755,20 @@ mod tests {
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("subnet = 172.10.1.0"),
-            "房间模式下 subnet 应写房间网段基址：\n{text}"
+            "in room mode subnet should be the room subnet base:\n{text}"
         );
-        assert!(!text.contains("192.168.100.0"), "不应再写原网段：\n{text}");
+        assert!(!text.contains("192.168.100.0"), "the original subnet should no longer be written:\n{text}");
 
         dep.room = None;
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("subnet = 192.168.100.0"), "非房间模式走原网段：\n{text}");
+        assert!(text.contains("subnet = 192.168.100.0"), "outside room mode the original subnet is used:\n{text}");
     }
 
     #[test]
     fn restrict_always_written_from_ratio() {
 
         let text = render_segatools_ini(&snapshot(), None);
-        assert!(text.contains("[io4]\nrestrict = 128\n"), "未设置比率时写默认 128");
+        assert!(text.contains("[io4]\nrestrict = 128\n"), "without a ratio the default 128 is written");
 
         let mut dep = snapshot();
         dep.input.ratio = Some(96);
@@ -794,7 +779,7 @@ mod tests {
         dep.game_id = Some("SDDF".into());
         dep.version = None;
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("[io3]\nrestrict = 128\n"), "IDZ 未设置比率时写默认 128");
+        assert!(text.contains("[io3]\nrestrict = 128\n"), "IDZ writes the default 128 without a ratio");
 
         dep.input.ratio = Some(200);
         let text = render_segatools_ini(&dep, None);
@@ -917,18 +902,18 @@ mod tests {
         assert!(text.contains("[ds]\nregion = 1"));
         assert!(text.contains("felicaGen = 0"));
         assert!(text.contains("aimeGen = 1"));
-        assert!(text.contains(r"aimePath = DEVICE\aime.txt"), "未选卡回退默认");
-        assert!(text.contains("[netenv]\nenable = 1"), "IDZ 写 netenv 开关：\n{text}");
-        assert!(!text.contains("addrSuffix"), "主机 IP 未配置时不写 addrSuffix：\n{text}");
-        assert!(text.contains("[io3]"), "IDZ 输入段为 io3");
+        assert!(text.contains(r"aimePath = DEVICE\aime.txt"), "without a card it falls back to the default");
+        assert!(text.contains("[netenv]\nenable = 1"), "IDZ writes the netenv switch:\n{text}");
+        assert!(!text.contains("addrSuffix"), "without a host IP addrSuffix is not written:\n{text}");
+        assert!(text.contains("[io3]"), "the IDZ input section is io3");
         assert!(
             text.contains("[gfx]\nenable = 1"),
-            "IDZ 图形钩子恒启用：\n{text}"
+            "the IDZ graphics hook is always enabled:\n{text}"
         );
-        assert!(text.contains("windowed = 1"), "IDZ 恒窗口化：\n{text}");
-        assert!(!text.contains("[indrun]"), "IDZ 无 indrun");
-        assert!(!text.contains("dipsw3"), "机位 dipsw 仅 SDGT");
-        assert!(!text.contains("[keychip]\nregion"), "IDZ region 不在 keychip");
+        assert!(text.contains("windowed = 1"), "IDZ is always windowed:\n{text}");
+        assert!(!text.contains("[indrun]"), "IDZ has no indrun");
+        assert!(!text.contains("dipsw3"), "the seat dipsw is SDGT only");
+        assert!(!text.contains("[keychip]\nregion"), "the IDZ region is not in keychip");
     }
 
     #[test]
@@ -939,7 +924,7 @@ mod tests {
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("[gfx]\nenable = 1\nwindowed = 1"),
-            "默认设置未关闭：仅写 enable / windowed：\n{text}"
+            "defaults not turned off: only enable / windowed are written:\n{text}"
         );
         assert!(!text.contains("width") && !text.contains("height"));
 
@@ -948,11 +933,11 @@ mod tests {
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("[gfx]\nenable = 1\nwidth = 1920\nheight = 1080"),
-            "关闭默认设置 + 选分辨率：\n{text}"
+            "defaults turned off + a resolution chosen:\n{text}"
         );
         assert!(
             text.contains("\nframed = 1\nwindowed = 1"),
-            "无边框未开启应写 framed=1 且 windowed=1：\n{text}"
+            "without borderless, framed=1 and windowed=1 should be written:\n{text}"
         );
 
         let mut dep = snapshot();
@@ -961,7 +946,7 @@ mod tests {
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("[gfx]\nenable = 1\nwidth = 1920\nheight = 1080"),
-            "未选分辨率应写默认宽高：\n{text}"
+            "without a resolution, the default width and height should be written:\n{text}"
         );
 
         dep.graphics.borderless = Some(true);
@@ -974,17 +959,17 @@ mod tests {
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("[gfx]\nenable = 1\nwidth = 1920\nheight = 1080\nframed = 0\nwindowed = 1"),
-            "无边框开启应写 framed=0（windowed 恒 1）：\n{text}"
+            "with borderless, framed=0 should be written (windowed is always 1):\n{text}"
         );
         for key in ["fullscreen", "render_scale", "msaa", "af_level"] {
-            assert!(!text.contains(key), "{key} 不应写入 segatools.ini：\n{text}");
+            assert!(!text.contains(key), "{key} should not be written to segatools.ini:\n{text}");
         }
 
         dep.graphics.borderless = Some(false);
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("\nframed = 1\nwindowed = 1"),
-            "无边框关闭应写 framed=1 且 windowed=1：\n{text}"
+            "with borderless off, framed=1 and windowed=1 should be written:\n{text}"
         );
 
         let mut dep = snapshot();
@@ -992,7 +977,7 @@ mod tests {
         dep.graphics.default = Some(false);
         dep.graphics.resolution = Some("1920x1080".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(!text.contains("[gfx]"), "IDAC 无 [gfx] 节：\n{text}");
+        assert!(!text.contains("[gfx]"), "IDAC has no [gfx] section:\n{text}");
 
         let mut dep = snapshot();
         dep.game_id = Some("SDER".into());
@@ -1001,7 +986,7 @@ mod tests {
         let text = render_segatools_ini(&dep, None);
         assert!(
             text.contains("[gfx]\nenable = 1\nwidth = 1920\nheight = 1080"),
-            "分辨率异常应回退默认宽高：\n{text}"
+            "an invalid resolution should fall back to the default width and height:\n{text}"
         );
     }
 
@@ -1016,7 +1001,7 @@ mod tests {
             server_ip: crate::awl::HOST_SERVERBOX_IP.to_string(),
         });
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("[netenv]\nenable = 1\naddrSuffix = 103"), "成员 .103 应为 103：\n{text}");
+        assert!(text.contains("[netenv]\nenable = 1\naddrSuffix = 103"), "member .103 should be 103:\n{text}");
 
         dep.room = Some(RoomNetOverride {
             cidr: crate::awl::ROOM_CIDR.to_string(),
@@ -1024,21 +1009,21 @@ mod tests {
             server_ip: crate::awl::HOST_SERVERBOX_IP.to_string(),
         });
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("[netenv]\nenable = 1\naddrSuffix = 101"), "房主 .101 应为 101：\n{text}");
+        assert!(text.contains("[netenv]\nenable = 1\naddrSuffix = 101"), "host .101 should be 101:\n{text}");
 
         dep.game_id = Some("SDGT".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(!text.contains("addrSuffix"), "IDAC 不写 addrSuffix：\n{text}");
+        assert!(!text.contains("addrSuffix"), "IDAC does not write addrSuffix:\n{text}");
 
         let mut dep = snapshot();
         dep.game_id = Some("SDDF".into());
         dep.net.host_ip = Some("  192.168.100.50  ".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("[netenv]\nenable = 1\naddrSuffix = 50"), "非房间模式应按主机 IP 末字节写 50：\n{text}");
+        assert!(text.contains("[netenv]\nenable = 1\naddrSuffix = 50"), "outside room mode the last byte of the host IP, 50, should be written:\n{text}");
 
         dep.net.host_ip = None;
         let text = render_segatools_ini(&dep, None);
-        assert!(!text.contains("addrSuffix"), "主机 IP 未配置不写：\n{text}");
+        assert!(!text.contains("addrSuffix"), "without a host IP it is not written:\n{text}");
     }
 
     #[test]
@@ -1084,9 +1069,9 @@ mod tests {
         dep.input.left_button = Some(1004);
         dep.input.start_button = Some(2);
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("start = 2"), "真实按钮号应照写");
-        assert!(!text.contains("up = "), "十字键伪码不应写入 dinput");
-        assert!(!text.contains("left = "), "十字键伪码不应写入 dinput");
+        assert!(text.contains("start = 2"), "a real button number should be written as is");
+        assert!(!text.contains("up = "), "D-pad pseudo codes should not be written to dinput");
+        assert!(!text.contains("left = "), "D-pad pseudo codes should not be written to dinput");
     }
 
     #[test]
@@ -1104,19 +1089,19 @@ mod tests {
         dep.input.xi_accel = Some("RT".into());
         dep.input.xi_brake = Some("LT".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("start = A"), "前后空白应 trim：\n{text}");
+        assert!(text.contains("start = A"), "surrounding blanks should be trimmed:\n{text}");
         assert!(text.contains("viewChg = BACK"));
         assert!(text.contains("up = DPAD_UP"));
         assert!(text.contains("shiftUp = RB"));
         assert!(text.contains("coin = X"));
         assert!(text.contains("accel = RT"));
         assert!(text.contains("brake = LT"));
-        assert!(text.contains("xiScan = Y"), "刷卡键写 [aime] xiScan：\n{text}");
+        assert!(text.contains("xiScan = Y"), "the card scan button goes to [aime] xiScan:\n{text}");
         assert!(
             text.contains("xiDeviceIndex = 2"),
-            "xiScan 所用手柄槽位：\n{text}"
+            "the controller slot used by xiScan:\n{text}"
         );
-        assert!(!text.contains("card = "), "[xinput] 无 card 键（mice 才有）：\n{text}");
+        assert!(!text.contains("card = "), "[xinput] has no card key (only mice has one):\n{text}");
     }
 
     #[test]
@@ -1126,10 +1111,10 @@ mod tests {
         dep.input.kind = Some("xinput".into());
         dep.input.xi_left = Some("  ".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(!text.contains("left = "), "空白视为未设置：\n{text}");
-        assert!(!text.contains("start = "), "未捕获的槽位不写：\n{text}");
-        assert!(!text.contains("xiScan"), "未捕获刷卡键不写 xiScan：\n{text}");
-        assert!(!text.contains("xiDeviceIndex"), "无 xiScan 不写槽位：\n{text}");
+        assert!(!text.contains("left = "), "a blank value counts as unset:\n{text}");
+        assert!(!text.contains("start = "), "a slot that was not captured is not written:\n{text}");
+        assert!(!text.contains("xiScan"), "without a captured card scan button xiScan is not written:\n{text}");
+        assert!(!text.contains("xiDeviceIndex"), "without xiScan the slot is not written:\n{text}");
     }
 
     #[test]
@@ -1141,10 +1126,10 @@ mod tests {
         dep.input.xi_start = Some("A".into());
         dep.input.xi_card = Some("Y".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(!text.contains("[xinput]"), "dinput 模式无 [xinput] 节：\n{text}");
-        assert!(!text.contains("start = A"), "xi_* 不应写进 dinput 配置：\n{text}");
-        assert!(!text.contains("xiScan"), "dinput 模式不写 xiScan：\n{text}");
-        assert!(!text.contains("xiDeviceIndex"), "dinput 模式不写槽位：\n{text}");
+        assert!(!text.contains("[xinput]"), "dinput mode has no [xinput] section:\n{text}");
+        assert!(!text.contains("start = A"), "xi_* should not be written into the dinput config:\n{text}");
+        assert!(!text.contains("xiScan"), "dinput mode does not write xiScan:\n{text}");
+        assert!(!text.contains("xiDeviceIndex"), "dinput mode does not write the slot:\n{text}");
     }
 
     #[test]
@@ -1159,18 +1144,18 @@ mod tests {
 
         let mut dep = snapshot();
         dep.game_id = Some("SDDF".into());
-        deploy(&dir, tool, &dep).expect("IDZ 部署应成功");
+        deploy(&dir, tool, &dep).expect("the IDZ deployment should succeed");
 
-        assert!(dir.join("inject.exe").is_file(), "工具顶层 inject.exe 应拷贝");
+        assert!(dir.join("inject.exe").is_file(), "the top-level inject.exe of the tool should be copied");
         assert!(
             dir.join("idzhook.dll").is_file(),
-            "idz\\idzhook.dll 应拷贝到 amdaemon 目录"
+            "idz\\idzhook.dll should be copied to the amdaemon folder"
         );
         assert!(dir.join("segatools.ini").is_file());
         assert!(dir.join("option").is_dir() && dir.join("appdata").is_dir());
         assert!(
             !dir.join("config_hook.json").exists(),
-            "IDZ 不需要 config_hook.json"
+            "IDZ does not need config_hook.json"
         );
 
         let ini = fs::read_to_string(dir.join("segatools.ini")).unwrap();
@@ -1188,7 +1173,7 @@ mod tests {
 
         dep.aime_card = None;
         let text = render_segatools_ini(&dep, None);
-        assert!(!text.contains("aimePath"), "未选卡不写 aimePath");
+        assert!(!text.contains("aimePath"), "without a card aimePath is not written");
         assert!(text.contains("enable = 1"));
     }
 
@@ -1197,7 +1182,7 @@ mod tests {
         let mut dep = snapshot();
         dep.input.kind = Some("dinput".into());
         let text = render_segatools_ini(&dep, None);
-        let dinput = text.split("[dinput]").nth(1).expect("应存在 [dinput] 段");
+        let dinput = text.split("[dinput]").nth(1).expect("the [dinput] section should exist");
         for key in [
             "constantForceStrength",
             "damperStrength",
@@ -1206,11 +1191,11 @@ mod tests {
             "baseDamperFraction",
             "deadband",
         ] {
-            assert!(dinput.contains(key), "{key} 应位于 [dinput] 段");
+            assert!(dinput.contains(key), "{key} should be in the [dinput] section");
         }
-        let ffb = text.split("[ffb]").nth(1).expect("应存在 [ffb] 段");
+        let ffb = text.split("[ffb]").nth(1).expect("the [ffb] section should exist");
         assert!(ffb.contains("enable = 1"));
-        assert!(!ffb.contains("Strength"), "[ffb] 不含强度键");
+        assert!(!ffb.contains("Strength"), "[ffb] holds no strength keys");
 
         assert!(!text.contains("true") && !text.contains("false"));
     }
@@ -1224,7 +1209,7 @@ mod tests {
         assert_eq!(seat_dipsw(Some("A2")), (0, 1, 0));
         assert_eq!(seat_dipsw(Some("B1")), (0, 0, 1));
         assert_eq!(seat_dipsw(Some("B2")), (0, 1, 1));
-        assert_eq!(seat_dipsw(Some("???")), (1, 0, 0), "未知值回退单机");
+        assert_eq!(seat_dipsw(Some("???")), (1, 0, 0), "an unknown value falls back to single");
     }
 
     #[test]
@@ -1238,7 +1223,7 @@ mod tests {
         assert!(text.contains("dipsw3 = 1"));
         assert!(text.contains("dipsw4 = 0"));
         assert!(text.contains("dipsw5 = 0"));
-        assert!(!text.contains("[network]"), "addrSuffix 仅 IDZ（SDDF / SDER）");
+        assert!(!text.contains("[network]"), "addrSuffix is IDZ only (SDDF / SDER)");
 
         dep.system.seat = Some("A2".into());
         dep.system.master = Some(false);
@@ -1251,13 +1236,13 @@ mod tests {
         dep.game_id = Some("SDDF".into());
         dep.system.seat = Some("B2".into());
         let text = render_segatools_ini(&dep, None);
-        assert!(text.contains("[system]"), "enable/freeplay 仍在");
+        assert!(text.contains("[system]"), "enable/freeplay are still there");
         assert!(text.contains("[gpio]
-dipsw1"), "SDDF 主机在 [gpio] dipsw1");
-        assert!(!text.contains("dipsw2"), "dipsw2 仅 SDGT");
-        assert!(!text.contains("dipsw3"), "dipsw3 仅 SDGT");
-        assert!(!text.contains("dipsw4"), "dipsw4 仅 SDGT");
-        assert!(!text.contains("dipsw5"), "dipsw5 仅 SDGT");
+dipsw1"), "the SDDF host is in [gpio] dipsw1");
+        assert!(!text.contains("dipsw2"), "dipsw2 is SDGT only");
+        assert!(!text.contains("dipsw3"), "dipsw3 is SDGT only");
+        assert!(!text.contains("dipsw4"), "dipsw4 is SDGT only");
+        assert!(!text.contains("dipsw5"), "dipsw5 is SDGT only");
     }
 
     #[test]
@@ -1266,7 +1251,7 @@ dipsw1"), "SDDF 主机在 [gpio] dipsw1");
         dep.net.server = Some(" my.server.net ".into());
         let text = render_segatools_ini(&dep, None);
         assert!(text.contains("default = my.server.net"));
-        assert!(!text.contains("sdgt.arcadehub.xyz"), "自定义服务器时不再写默认域名");
+        assert!(!text.contains("sdgt.arcadehub.xyz"), "with a custom server the default domain is not written");
     }
 
     #[test]
@@ -1278,7 +1263,7 @@ dipsw1"), "SDDF 主机在 [gpio] dipsw1");
             assert!(sn.starts_with("ACAE01A"), "{sn}");
             assert!(
                 sn[8..].bytes().all(|b| b.is_ascii_digit()),
-                "尾 8 位应为数字：{sn}"
+                "the last 8 characters should be digits: {sn}"
             );
         }
     }
@@ -1292,7 +1277,7 @@ dipsw1"), "SDDF 主机在 [gpio] dipsw1");
             assert!(sn.starts_with("AAVE-01A"), "{sn}");
             assert!(
                 sn[8..].bytes().all(|b| b.is_ascii_digit()),
-                "尾 8 位应为数字：{sn}"
+                "the last 8 characters should be digits: {sn}"
             );
         }
     }
@@ -1311,11 +1296,11 @@ dipsw1"), "SDDF 主机在 [gpio] dipsw1");
             );
             assert!(
                 text.contains("[pcbid]\nserialNo = ACAE01A12345678"),
-                "{gid} 应写 [pcbid] serialNo：\n{text}"
+                "{gid} should write [pcbid] serialNo:\n{text}"
             );
             assert!(
                 text.contains("[ds]\nserialNO = AAVE-01A12345678"),
-                "{gid} 应写 [ds] serialNO：\n{text}"
+                "{gid} should write [ds] serialNO:\n{text}"
             );
         }
     }
@@ -1329,8 +1314,8 @@ dipsw1"), "SDDF 主机在 [gpio] dipsw1");
             Some("ACAE01A12345678"),
             Some("AAVE-01A12345678"),
         );
-        assert!(!text.contains("[pcbid]"), "未知 game_id 不写：\n{text}");
-        assert!(!text.contains("serialNO"), "未知 game_id 不写 ds serial：\n{text}");
+        assert!(!text.contains("[pcbid]"), "an unknown game_id writes nothing:\n{text}");
+        assert!(!text.contains("serialNO"), "an unknown game_id does not write the ds serial:\n{text}");
         let mut dep = snapshot();
         dep.game_id = Some("SDGT".into());
         let text = render_segatools_ini_with_pcbid(
@@ -1339,12 +1324,12 @@ dipsw1"), "SDDF 主机在 [gpio] dipsw1");
             Some("ACAE01A12345678"),
             Some("AAVE-01A12345678"),
         );
-        assert!(!text.contains("[pcbid]"), "SDGT 不写：\n{text}");
-        assert!(!text.contains("serialNO"), "SDGT 不写 ds serial：\n{text}");
+        assert!(!text.contains("[pcbid]"), "SDGT does not write it:\n{text}");
+        assert!(!text.contains("serialNO"), "SDGT does not write the ds serial:\n{text}");
 
         dep.game_id = Some("SDDF".into());
         let text = render_segatools_ini_with_pcbid(&dep, None, None, None);
-        assert!(!text.contains("[pcbid]"), "无 serial 整节省略：\n{text}");
-        assert!(!text.contains("serialNO"), "无 ds serial 整节省略：\n{text}");
+        assert!(!text.contains("[pcbid]"), "without a serial the whole section is left out:\n{text}");
+        assert!(!text.contains("serialNO"), "without a ds serial the whole section is left out:\n{text}");
     }
 }

@@ -1,10 +1,9 @@
 use windows_reactor::*;
 
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 use crate::reactor_app::Launcher;
-use crate::reactor_app::message::{Dialog, Message};
+use crate::reactor_app::message::Message;
 use crate::reactor_app::widgets::{separator, settings_row, settings_toggle};
 
 pub(in crate::reactor_app) const GFX_RESOLUTIONS: &[&str] = &["1360x768", "1920x1080", "2560x1440", "3840x2160"];
@@ -17,15 +16,16 @@ pub(in crate::reactor_app) const GFX_AF_LEVELS: &[&str] = &["2x", "4x", "8x", "1
 
 impl Launcher {
 
+    /// Saves the graphics settings into the file of the game whose settings page is open.
     pub(in crate::reactor_app) fn save_graphics(&mut self) {
-        if let Err(e) = self.store.save_graphics(&self.graphics) {
-            self.dialog = Dialog::Error {
-                message: tf!("保存 config.ini 失败：{}", "Failed to save config.ini: {}", e),
-            };
+        if let Some(game) = self.settings_game() {
+            let result = self.store.save_game_graphics(game, &self.graphics);
+            self.report_save(result);
         }
     }
 
-    pub(in crate::reactor_app) fn graphics_page(&self, context: &mut ViewContext<Self>) -> View {
+    /// The Graphics tab of an Initial D game's settings page.
+    pub(in crate::reactor_app) fn graphics_settings(&self, context: &mut ViewContext<Self>) -> View {
         let gfx = &self.graphics;
 
         let locked = gfx.default != Some(false);
@@ -91,7 +91,7 @@ impl Launcher {
                 "gfx-default",
                 toggle_row(
                     Symbol::Repair,
-                    t!("默认设置", "Default settings"),
+                    &t!("page_graphics.default_settings"),
                     gfx.default != Some(false),
                     true,
                     Message::GraphicsDefaultToggled,
@@ -102,7 +102,7 @@ impl Launcher {
                 "gfx-borderless",
                 toggle_row(
                     Symbol::BackToWindow,
-                    t!("无边框模式", "Borderless"),
+                    &t!("page_graphics.borderless"),
                     gfx.borderless == Some(true),
                     !locked,
                     Message::GraphicsBorderlessToggled,
@@ -113,10 +113,10 @@ impl Launcher {
                 "gfx-resolution",
                 combo_row(
                     Symbol::View,
-                    t!("分辨率", "Resolution"),
+                    &t!("page_graphics.resolution"),
                     resolution_items,
                     resolution_idx,
-                    t!("选择分辨率", "Select resolution"),
+                    &t!("page_graphics.select_resolution"),
                     !locked,
                     Message::GraphicsResolutionSelected,
                 ),
@@ -126,7 +126,7 @@ impl Launcher {
                 "gfx-render-scale",
                 toggle_row(
                     Symbol::Zoom,
-                    t!("渲染倍数", "Render scale"),
+                    &t!("page_graphics.render_scale"),
                     gfx.render_scale == Some(true),
                     !locked,
                     Message::GraphicsRenderScaleToggled,
@@ -140,10 +140,10 @@ impl Launcher {
                 "gfx-render-scale-level",
                 combo_row(
                     Symbol::List,
-                    t!("渲染倍率", "Render scale level"),
+                    &t!("page_graphics.render_scale_level"),
                     render_scale_items,
                     render_scale_idx,
-                    t!("选择倍率", "Select level"),
+                    &t!("page_graphics.select_render_scale"),
                     !locked,
                     Message::GraphicsRenderScaleLevelSelected,
                 ),
@@ -154,7 +154,7 @@ impl Launcher {
             "gfx-msaa",
             toggle_row(
                 Symbol::Filter,
-                t!("MSAA 抗锯齿", "MSAA antialiasing"),
+                &t!("page_graphics.msaa_antialiasing"),
                 gfx.msaa == Some(true),
                 !locked,
                 Message::GraphicsMsaaToggled,
@@ -167,10 +167,10 @@ impl Launcher {
                 "gfx-msaa-level",
                 combo_row(
                     Symbol::List,
-                    t!("MSAA 倍数", "MSAA level"),
+                    &t!("page_graphics.msaa_level"),
                     msaa_level_items,
                     msaa_level_idx,
-                    t!("选择倍数", "Select level"),
+                    &t!("page_graphics.select_sample_level"),
                     !locked,
                     Message::GraphicsMsaaLevelSelected,
                 ),
@@ -181,7 +181,7 @@ impl Launcher {
             "gfx-af",
             toggle_row(
                 Symbol::Rotate,
-                t!("各向异性过滤", "Anisotropic filtering"),
+                &t!("page_graphics.anisotropic_filtering"),
                 gfx.af == Some(true),
                 !locked,
                 Message::GraphicsAfToggled,
@@ -194,17 +194,17 @@ impl Launcher {
                 "gfx-af-level",
                 combo_row(
                     Symbol::List,
-                    t!("过滤倍数", "Filter level"),
+                    &t!("page_graphics.filter_level"),
                     af_level_items,
                     af_level_idx,
-                    t!("选择倍数", "Select level"),
+                    &t!("page_graphics.select_sample_level"),
                     !locked,
                     Message::GraphicsAfLevelSelected,
                 ),
             ));
         }
 
-        let card = Border::new()
+        Border::new()
             .margin(Thickness::new(0.0, 16.0, 0.0, 0.0))
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .corner_radius(4.0)
@@ -215,22 +215,6 @@ impl Launcher {
                 StackPanel::new()
                     .horizontal_alignment(HorizontalAlignment::Stretch)
                     .keyed_children(rows),
-            );
-
-        ScrollViewer::new()
-            .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
-            .content(
-                StackPanel::new()
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .margin(Thickness::new(28.0, 20.0, 28.0, 16.0))
-                    .spacing(4.0)
-                    .children((
-                        StackPanel::new().children([TextBlock::new()
-                            .text(t!("图形设置", "Graphics"))
-                            .font_size(26.0)
-                            .font_weight(FontWeight::SEMI_BOLD)]),
-                        card,
-                    )),
             )
             .into()
     }

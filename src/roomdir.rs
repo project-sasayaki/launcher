@@ -2,8 +2,7 @@ use serde::Deserialize;
 use std::sync::OnceLock;
 use windows::core::PCWSTR;
 
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 static DIR_SESSION: OnceLock<usize> = OnceLock::new();
 
@@ -24,7 +23,7 @@ fn shared_session() -> Result<*mut core::ffi::c_void, String> {
         )
     };
     if session.is_null() {
-        return Err(t!("无法初始化网络", "Failed to initialize network").to_string());
+        return Err(t!("http.failed_to_initialize").to_string());
     }
     unsafe {
         let timeout_bytes = 5000u32.to_ne_bytes();
@@ -66,10 +65,10 @@ impl DirError {
     }
     pub fn message(&self) -> String {
         match self {
-            DirError::NotFound => t!("房间不存在或已过期", "Room not found or expired").to_string(),
-            DirError::Forbidden => t!("房间密码错误", "Wrong room password").to_string(),
-            DirError::Full => t!("房间已满（4/4）", "Room is full (4/4)").to_string(),
-            DirError::Transport(_e) => tf!("无法连接房间服务器", "Cannot reach the room server").to_string(),
+            DirError::NotFound => t!("roomdir.room_not_found_or_expired").to_string(),
+            DirError::Forbidden => t!("roomdir.wrong_room_password").to_string(),
+            DirError::Full => t!("roomdir.room_is_full").to_string(),
+            DirError::Transport(_e) => t!("roomdir.cannot_reach_room_server").to_string(),
             DirError::Other(m) => m.clone(),
         }
     }
@@ -152,7 +151,7 @@ impl RoomDirClient {
         } else if let Some(r) = url_t.strip_prefix("http://") {
             (false, r)
         } else {
-            return Err(t!("目录地址仅支持 http/https", "Directory URL must be http/https").to_string());
+            return Err(t!("roomdir.directory_url_must_be_http").to_string());
         };
         let (host_part, path_part) = match rest.find('/') {
             Some(i) => (&rest[..i], &rest[i..]),
@@ -171,7 +170,7 @@ impl RoomDirClient {
             let host_w = crate::win_util::to_wide_null(&host);
             let connect = WinHttpConnect(session, PCWSTR::from_raw(host_w.as_ptr()), port, 0);
             if connect.is_null() {
-                return Err(tf!("无法连接 {host}", "Cannot connect to {host}").to_string());
+                return Err(t!("roomdir.cannot_connect_to", host = host).to_string());
             }
             let path_w = crate::win_util::to_wide_null(&path_part);
             let verb_w = crate::win_util::to_wide_null(verb);
@@ -187,7 +186,7 @@ impl RoomDirClient {
             );
             if request.is_null() {
                 let _ = WinHttpCloseHandle(connect);
-                return Err(t!("无法创建请求", "Failed to create request").to_string());
+                return Err(t!("http.failed_to_create_request").to_string());
             }
             let policy: u32 = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
             let _ = WinHttpSetOption(
@@ -204,7 +203,7 @@ impl RoomDirClient {
                 if verb == "POST" {
                     let ok = raw_add_request_headers(request, hdr.as_ptr(), (-1i32) as u32, WINHTTP_ADDREQ_FLAG_ADD);
                     if ok == 0 {
-                        return Err(t!("添加请求头失败", "Failed to add request headers").to_string());
+                        return Err(t!("roomdir.failed_to_add_request_headers").to_string());
                     }
                 }
                 let body_bytes = body.unwrap_or("").as_bytes();
@@ -215,9 +214,9 @@ impl RoomDirClient {
                 };
                 let body_len = body_bytes.len() as u32;
                 WinHttpSendRequest(request, None, optional, body_len, body_len, 0)
-                    .map_err(|e| tf!("发送请求失败：{e}", "Failed to send request: {e}").to_string())?;
+                    .map_err(|e| t!("http.failed_to_send_request", error = e).to_string())?;
                 WinHttpReceiveResponse(request, core::ptr::null_mut())
-                    .map_err(|e| tf!("接收响应失败：{e}", "Failed to receive response: {e}").to_string())?;
+                    .map_err(|e| t!("http.failed_to_receive_response", error = e).to_string())?;
                 Ok(())
             })();
             if let Err(e) = result {
@@ -388,10 +387,10 @@ mod tests {
 
         match DirError::from_status(500, "boom") {
             DirError::Other(m) => {
-                assert!(m.contains("500"), "应带上状态码：{m}");
-                assert!(m.contains("boom"), "应带上响应正文：{m}");
+                assert!(m.contains("500"), "the status code should be included: {m}");
+                assert!(m.contains("boom"), "the response body should be included: {m}");
             }
-            e => panic!("非 404/403/409 应归为 Other，实际 {e:?}"),
+            e => panic!("anything but 404/403/409 should be Other, got {e:?}"),
         }
     }
 
@@ -404,7 +403,7 @@ mod tests {
             DirError::Transport("x".to_string()),
             DirError::Other("oops".to_string()),
         ] {
-            assert!(!e.message().trim().is_empty(), "{e:?} 应有提示文案");
+            assert!(!e.message().trim().is_empty(), "{e:?} should have a message");
         }
     }
 

@@ -16,7 +16,7 @@ use windows::{
             HidP_GetValueCaps, HidP_Input, PHIDP_PREPARSED_DATA,
         },
         Devices::Properties::{
-            DEVPKEY_NAME, DEVPKEY_Device_InstanceId, DEVPROP_TYPE_STRING, DEVPROPTYPE,
+            DEVPKEY_NAME, DEVPKEY_Device_DriverInfPath, DEVPKEY_Device_InstanceId, DEVPROP_TYPE_STRING, DEVPROPTYPE,
         },
         Foundation::{CloseHandle, DEVPROPKEY, HANDLE, HWND, LPARAM, LRESULT, WPARAM},
         Storage::FileSystem::{
@@ -43,8 +43,7 @@ use windows::{
     core::{w, PCWSTR},
 };
 
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 const HID_USAGE_PAGE_GENERIC: u16 = 0x01;
 const HID_USAGE_JOYSTICK: u16 = 0x04;
@@ -93,13 +92,14 @@ pub enum NameSource {
 }
 
 impl NameSource {
-    fn tag(self) -> &'static str {
+    /// Text key of the name of this source, as the diagnostics report shows it.
+    fn label_key(self) -> &'static str {
         match self {
-            NameSource::HidProduct => "HID产品名",
-            NameSource::SiblingInterface => "同设备其它接口",
-            NameSource::DevNode => "设备实例名",
-            NameSource::ParentDevNode => "父设备名",
-            NameSource::PathFallback => "接口路径段",
+            NameSource::HidProduct => "rawinput.source_hid_product",
+            NameSource::SiblingInterface => "rawinput.source_sibling_interface",
+            NameSource::DevNode => "rawinput.source_dev_node",
+            NameSource::ParentDevNode => "rawinput.source_parent_dev_node",
+            NameSource::PathFallback => "rawinput.source_path_fallback",
         }
     }
 }
@@ -130,8 +130,75 @@ pub struct CapturedButton {
 
 #[derive(Clone, Debug)]
 pub struct CapturedAxis {
-
+    /// The HID usage's name (X, Y, …, Slider, Dial, Wheel).
     pub name: String,
+    /// The axis DirectInput makes of it, by the name KittenTools reads it by (X, Y, Z, RX,
+    /// RY, RZ, U, V); `None` when DirectInput puts it in none of those eight.
+    pub dinput: Option<&'static str>,
+}
+
+/// The axes of `DIJOYSTATE2` KittenTools reads, by its names for them (`idas_di.c`): the six
+/// fixed axes, then the two sliders.
+pub const DINPUT_AXES: [&str; 8] = ["X", "Y", "Z", "RX", "RY", "RZ", "U", "V"];
+
+const HID_USAGE_PAGE_SIMULATION: u16 = 0x02;
+
+/// The DirectInput axis of each value of a device, given as `(usage page, first usage, last
+/// usage)` in the order `HidP_GetValueCaps` lists them; the result names each value's first
+/// usage.
+///
+/// This is Windows' rule as Wine's DirectInput reproduces it (`dlls/dinput/joystick_hid.c`):
+/// X to Rz, and the simulation controls that stand for them, keep their own axis; a second
+/// value for an axis already taken, Slider, Dial and every other value go to the sliders, in
+/// the order of the list. The hat switch is a POV, not an axis.
+fn dinput_axis_names(values: &[(u16, u16, u16)]) -> Vec<Option<&'static str>> {
+    let mut taken = [false; 6];
+    let mut sliders = 0;
+    let mut names = Vec::with_capacity(values.len());
+    for &(page, first, last) in values {
+        let mut first_name = None;
+        for usage in first..=last {
+            // The axis the usage stands for: 0 to 5 are X to Rz.
+            let fixed = match (page, usage) {
+                (HID_USAGE_PAGE_GENERIC, HID_USAGE_HAT) => continue,
+                (HID_USAGE_PAGE_GENERIC, 0x30..=0x35) => Some((usage - 0x30) as usize),
+                (HID_USAGE_PAGE_SIMULATION, 0xC8) => Some(0), // steering
+                (HID_USAGE_PAGE_SIMULATION, 0xC4) => Some(1), // accelerator
+                (HID_USAGE_PAGE_GENERIC, 0x38) | (HID_USAGE_PAGE_SIMULATION, 0xBB) => Some(2), // wheel, throttle
+                (HID_USAGE_PAGE_SIMULATION, 0xBA | 0xC5) => Some(5), // rudder, brake
+                _ => None,
+            };
+            // Its place in DIJOYSTATE2's axes: its own, or else the next slider (6, 7, …).
+            let instance = match fixed {
+                Some(axis) if !taken[axis] => {
+                    taken[axis] = true;
+                    axis
+                }
+                _ => {
+                    sliders += 1;
+                    5 + sliders
+                }
+            };
+            if usage == first {
+                first_name = DINPUT_AXES.get(instance).copied();
+            }
+        }
+        names.push(first_name);
+    }
+    names
+}
+
+/// The usages a value capability covers, from its first to its last.
+fn usage_range(cap: &HIDP_VALUE_CAPS) -> (u16, u16) {
+    // SAFETY: `IsRange` tells which member of the union the HID parser filled in.
+    unsafe {
+        if cap.IsRange {
+            (cap.Anonymous.Range.UsageMin, cap.Anonymous.Range.UsageMax)
+        } else {
+            let usage = cap.Anonymous.NotRange.Usage;
+            (usage, usage)
+        }
+    }
 }
 
 static CAPTURE_SLOT: OnceLock<Mutex<Option<CapturedButton>>> = OnceLock::new();
@@ -168,9 +235,9 @@ fn axis_usage_name(usage: u16) -> String {
         0x30 => "X",
         0x31 => "Y",
         0x32 => "Z",
-        0x33 => "Rx",
-        0x34 => "Ry",
-        0x35 => "Rz",
+        0x33 => "RX",
+        0x34 => "RY",
+        0x35 => "RZ",
         0x36 => "Slider",
         0x37 => "Dial",
         0x38 => "Wheel",
@@ -193,7 +260,7 @@ fn label_from_path(path: &str) -> String {
     if let Some((_, rest)) = lower.split_once("hid#") {
         rest.split('#').next().unwrap_or(rest).to_uppercase()
     } else {
-        t!("未知设备", "Unknown device").to_string()
+        t!("rawinput.unknown_device").to_string()
     }
 }
 
@@ -216,7 +283,8 @@ unsafe fn hid_product_name(path: &str) -> Option<String> {
         return None;
     }
     let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    let name = String::from_utf16_lossy(&buf[..end]).trim().to_string();
+    let name = String::from_utf16_lossy(&buf[..end]);
+    let name = name.trim_matches(|c: char| c.is_whitespace() || c.is_control()).to_string();
     (!name.is_empty()).then_some(name)
 }
 
@@ -233,19 +301,23 @@ fn is_top_level_collection(path: &str) -> bool {
     !path.to_lowercase().contains("&mi_")
 }
 
-fn is_generic_device_name(name: &str) -> bool {
-    const GENERIC: [&str; 8] = [
-        "composite",
-        "usb input device",
-        "hid-compliant",
-        "hid 兼容",
-        "usb 复合设备",
-        "generic",
-        "standard",
-        "符合 hid",
-    ];
-    let lower = name.to_lowercase();
-    GENERIC.iter().any(|g| lower.contains(g))
+/// The INF files of Windows' own class drivers. Windows names a device they drive after
+/// its class ("HID-compliant game controller", "USB Composite Device", … in the display
+/// language), so that name does not tell which product it is.
+const GENERIC_DRIVER_INFS: [&str; 7] =
+    ["input.inf", "hidserv.inf", "usb.inf", "usbhub.inf", "usbhub3.inf", "keyboard.inf", "msmouse.inf"];
+
+fn is_generic_driver_inf(inf: &str) -> bool {
+    GENERIC_DRIVER_INFS.iter().any(|generic| inf.eq_ignore_ascii_case(generic))
+}
+
+/// The name Windows shows for a device node, unless it is only the name of a device class.
+unsafe fn devnode_product_name(devnode: u32) -> Option<String> {
+    let inf = devnode_string_property(devnode, &DEVPKEY_Device_DriverInfPath).unwrap_or_default();
+    if is_generic_driver_inf(&inf) {
+        return None;
+    }
+    devnode_string_property(devnode, &DEVPKEY_NAME)
 }
 
 fn string_from_utf16_bytes(bytes: &[u8]) -> String {
@@ -312,10 +384,8 @@ unsafe fn pnp_device_name(path: &str) -> Option<(String, NameSource)> {
     {
         return None;
     }
-    if let Some(n) = devnode_string_property(devnode, &DEVPKEY_NAME) {
-        if !is_generic_device_name(&n) {
-            return Some((n, NameSource::DevNode));
-        }
+    if let Some(n) = devnode_product_name(devnode) {
+        return Some((n, NameSource::DevNode));
     }
     let mut parent = devnode;
     for _ in 0..2 {
@@ -324,10 +394,8 @@ unsafe fn pnp_device_name(path: &str) -> Option<(String, NameSource)> {
             break;
         }
         parent = next;
-        if let Some(n) = devnode_string_property(parent, &DEVPKEY_NAME) {
-            if !is_generic_device_name(&n) {
-                return Some((n, NameSource::ParentDevNode));
-            }
+        if let Some(n) = devnode_product_name(parent) {
+            return Some((n, NameSource::ParentDevNode));
         }
     }
     None
@@ -362,7 +430,7 @@ fn list_xinput_devices() -> Vec<GameDevice> {
         if unsafe { XInputGetCapabilities(index, XINPUT_FLAG_GAMEPAD, &mut caps) } != 0 {
             continue;
         }
-        let label = tf!("手柄 {}（XInput）", "Gamepad {} (XInput)", index + 1);
+        let label = t!("rawinput.gamepad", value = index + 1).to_string();
         devices.push(GameDevice {
             path: index.to_string(),
 
@@ -534,17 +602,13 @@ unsafe fn list_game_devices_impl() -> Vec<GameDevice> {
         }
     }
 
-    let mut report = String::from("[rawinput] HID 设备名诊断（写入值 = 游戏侧 deviceName）：\n");
+    let mut report = format!("{}\n", t!("rawinput.diagnostics_title"));
     let mut devices: Vec<GameDevice> = Vec::new();
     let mut fallback_paths: Vec<String> = Vec::new();
     for p in &paths {
         let (name, source) = resolve_device_name(p, group_rep.get(&group_key(p)));
-        report.push_str(&format!(
-            "  {} | 来源：{} | 写入值：{}\n",
-            p,
-            source.tag(),
-            name
-        ));
+        let line = t!("rawinput.diagnostics_device", path = p, source = t!(source.label_key()), name = name);
+        report.push_str(&format!("  {line}\n"));
 
         if source == NameSource::PathFallback {
             fallback_paths.push(p.clone());
@@ -562,19 +626,16 @@ unsafe fn list_game_devices_impl() -> Vec<GameDevice> {
     }
     for d in devices.iter_mut() {
         if counts.get(&d.name).copied().unwrap_or(0) > 1 {
-            d.label = format!("{}（{}）", d.name, label_from_path(&d.path));
+            d.label = t!("rawinput.label_with_path", name = d.name, path = label_from_path(&d.path)).to_string();
         }
 
         if fallback_paths.iter().any(|p| *p == d.path) {
-            d.label = tf!(
-                "{}（未取到产品名）",
-                "{} (product name unavailable)",
-                d.label
-            );
+            d.label = t!("rawinput.label_product_name_unavailable", label = d.label).to_string();
         }
     }
     for d in &devices {
-        report.push_str(&format!("  列表项：{} → 写入 {}\n", d.label, d.name));
+        let line = t!("rawinput.diagnostics_list_item", label = d.label, name = d.name);
+        report.push_str(&format!("  {line}\n"));
     }
     eprintln!("{report}");
     set_diagnostics(report);
@@ -649,7 +710,7 @@ unsafe fn capture_impl(timeout: Duration, kind: CaptureKind) -> bool {
     let hwnd = match CreateWindowExW(
         WINDOW_EX_STYLE(0),
         w!("DnetRawInputCapture"),
-        w!("Dnet 按键捕获"),
+        w!("Dnet input capture"),
         WINDOW_STYLE(0),
         0,
         0,
@@ -852,12 +913,7 @@ unsafe fn handle_raw_input(lparam: LPARAM) {
         if cap.UsagePage != HID_USAGE_PAGE_GENERIC {
             continue;
         }
-        let (min, max) = if cap.IsRange {
-            (cap.Anonymous.Range.UsageMin, cap.Anonymous.Range.UsageMax)
-        } else {
-            let u = cap.Anonymous.NotRange.Usage;
-            (u, u)
-        };
+        let (min, max) = usage_range(cap);
         if !(min..=max).contains(&HID_USAGE_HAT) {
             continue;
         }
@@ -895,17 +951,21 @@ unsafe fn handle_raw_input(lparam: LPARAM) {
 
     let mut axis_prev = axis_state().lock().unwrap();
     let axis_vec = axis_prev.entry(key).or_default();
+    let values: Vec<(u16, u16, u16)> = vcaps
+        .iter()
+        .map(|cap| {
+            let (min, max) = usage_range(cap);
+            (cap.UsagePage, min, max)
+        })
+        .collect();
+    let dinput_names = dinput_axis_names(&values);
+
     let mut axis_index: u32 = 0;
-    for cap in vcaps.iter() {
-        if cap.UsagePage != HID_USAGE_PAGE_GENERIC {
+    for (cap_index, cap) in vcaps.iter().enumerate() {
+        let (page, min, max) = values[cap_index];
+        if page != HID_USAGE_PAGE_GENERIC {
             continue;
         }
-        let (min, max) = if cap.IsRange {
-            (cap.Anonymous.Range.UsageMin, cap.Anonymous.Range.UsageMax)
-        } else {
-            let u = cap.Anonymous.NotRange.Usage;
-            (u, u)
-        };
         if (min..=max).contains(&HID_USAGE_HAT) {
 
             continue;
@@ -939,6 +999,7 @@ unsafe fn handle_raw_input(lparam: LPARAM) {
             if slot.is_none() {
                 *slot = Some(CapturedAxis {
                     name: axis_usage_name(usage),
+                    dinput: dinput_names[cap_index],
                 });
             }
         }
@@ -952,7 +1013,41 @@ unsafe fn handle_raw_input(lparam: LPARAM) {
 
 #[cfg(test)]
 mod tests {
-    use super::{group_key, is_generic_device_name, is_top_level_collection};
+    use super::{dinput_axis_names, group_key, is_generic_driver_inf, is_top_level_collection};
+    use super::{HID_USAGE_PAGE_GENERIC as GENERIC, HID_USAGE_PAGE_SIMULATION as SIMULATION};
+
+    #[test]
+    fn fixed_axes_keep_their_names_wherever_they_are() {
+        // Rz listed before X, and the hat switch in between.
+        let values = [(GENERIC, 0x35, 0x35), (GENERIC, 0x39, 0x39), (GENERIC, 0x30, 0x30), (GENERIC, 0x31, 0x31)];
+        assert_eq!(dinput_axis_names(&values), vec![Some("RZ"), None, Some("X"), Some("Y")]);
+    }
+
+    #[test]
+    fn sliders_and_dials_take_u_then_v_in_list_order() {
+        let values = [(GENERIC, 0x37, 0x37), (GENERIC, 0x30, 0x30), (GENERIC, 0x36, 0x36), (GENERIC, 0x36, 0x36)];
+        assert_eq!(dinput_axis_names(&values), vec![Some("U"), Some("X"), Some("V"), None]);
+    }
+
+    #[test]
+    fn a_second_value_for_a_taken_axis_becomes_a_slider() {
+        // The wheel usage stands for Z, which the Z value took first.
+        let values = [(GENERIC, 0x32, 0x32), (GENERIC, 0x38, 0x38)];
+        assert_eq!(dinput_axis_names(&values), vec![Some("Z"), Some("U")]);
+    }
+
+    #[test]
+    fn simulation_controls_stand_for_axes() {
+        let values = [(SIMULATION, 0xC8, 0xC8), (SIMULATION, 0xC4, 0xC4), (SIMULATION, 0xC5, 0xC5)];
+        assert_eq!(dinput_axis_names(&values), vec![Some("X"), Some("Y"), Some("RZ")]);
+    }
+
+    #[test]
+    fn a_range_is_named_by_its_first_usage_and_takes_every_slot() {
+        // X to Z in one value, then a slider: the range takes X, Y and Z.
+        let values = [(GENERIC, 0x30, 0x32), (GENERIC, 0x36, 0x36)];
+        assert_eq!(dinput_axis_names(&values), vec![Some("X"), Some("U")]);
+    }
 
     #[test]
     fn same_device_shares_group_key() {
@@ -975,9 +1070,10 @@ mod tests {
 
     #[test]
     fn generic_driver_names_are_rejected() {
-        assert!(is_generic_device_name("USB Composite Device"));
-        assert!(is_generic_device_name("HID-compliant game controller"));
-        assert!(is_generic_device_name("USB 复合设备"));
-        assert!(!is_generic_device_name("Thrustmaster Advance Racer"));
+        assert!(is_generic_driver_inf("input.inf"));
+        assert!(is_generic_driver_inf("usb.inf"));
+        assert!(is_generic_driver_inf("Input.INF"));
+        assert!(!is_generic_driver_inf("oem42.inf"));
+        assert!(!is_generic_driver_inf(""));
     }
 }

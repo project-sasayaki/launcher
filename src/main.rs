@@ -2,27 +2,31 @@
 
 use std::os::windows::ffi::OsStrExt;
 
+use rust_i18n::t;
+
 pub const APP_VERSION: &str = "1.0.0.2";
+
+// Compiles the texts of locales/*.yml into the binary. A key missing from a locale is
+// shown in English; i18n::tests checks that no locale misses any.
+rust_i18n::i18n!("locales", fallback = "en");
 
 mod awl;
 mod cards;
 mod db;
-mod i18n;
 mod detect;
+mod file_util;
 mod filedialog;
+mod font_file;
+mod games;
+mod i18n;
 mod icf;
 mod ini;
-mod initiald;
-mod kitten;
-mod launch;
-mod mice;
+mod loaders;
 mod netinfo;
 mod rawinput;
 mod reactor_app;
-mod render_util;
-mod roomdir;
 mod room_sync;
-mod segatools;
+mod roomdir;
 mod server;
 mod storage;
 mod update;
@@ -91,12 +95,7 @@ fn relaunch_elevated() -> bool {
 fn bootstrap_runtime() {
     if let Err(e) = windows_reactor::bootstrap() {
 
-        let msg: String = format!(
-            "启动失败：Windows App SDK 运行时初始化失败。\n\n\
-             错误信息：{e}\n\n\
-             最常见原因：本机安装的运行时版本过旧（launcher 需要 2.x 版本族）。\n\
-             请安装最新版 Windows App SDK 运行时（安装时选择「为所有用户安装」）后重试。"
-        );
+        let msg = t!("main.runtime_init_failed", error = e).to_string();
         let msg_wide = crate::win_util::to_wide_null(&msg);
         let title_wide = crate::win_util::to_wide_null("Sasayaki launcher");
         unsafe {
@@ -197,7 +196,7 @@ fn main() {
     bootstrap_runtime();
     if let Err(e) = windows_reactor::App::run_component::<reactor_app::Launcher>(()) {
 
-        eprintln!("启动器界面异常退出：{e}");
+        eprintln!("the launcher UI exited with an error: {e}");
         std::process::exit(1);
     }
 }

@@ -1,343 +1,397 @@
-# Sasayaki 启动器（Dnet）
+# Sasayaki Launcher (Dnet)
 
-用于 **kitten / mice / segatools** 三类加载器启动头文字D 系列街机游戏的 Windows 启动器：
-kitten 对应 **D4/D5**（Lindbergh ELF）、mice 对应 **D6/D7/D8**（RingEdge exe）、segatools 对应 **IDAC（InitialD The Arcade，ALLS）与 IDZ（InitialD Arcade Stage Zero，Nu）**。
+A Windows launcher that starts the Initial D series of arcade games through three loaders, **kitten / mice / segatools**:
+kitten runs **D4/D5** (Lindbergh ELF), mice runs **D6/D7/D8** (RingEdge exe), and segatools runs **IDAC (InitialD The Arcade, ALLS) and IDZ (InitialD Arcade Stage Zero, Nu)**. kitten also runs **Wangan Midnight Maximum Tune 3 / 3DX / 3DX+** (Namco System N2 ELF).
 
-- **技术栈**：Rust + **windows-reactor**（微软官方 WinUI 3 声明式框架）——真 Windows 11 原生界面
-- **原生外观**：Mica 背景、Fluent 控件、深浅色自动跟随系统；窗口客户区 1180×720，带内嵌图标与版本资源（`build.rs` 从 `main.rs` 的 `APP_VERSION` 读取）
-- **识别方式**：手动添加游戏文件（`.exe` / `.elf` / **`ICF1`**）→ exe/elf 按 **CRC 校验码**查识别库（算法逐字节复刻自 mice/kitten 源码）；IDAC/IDZ 无 CRC 条目，通过 **ICF1 文件**解密出 appid + 版本号查识别库
-- **中英双语**：全部文案 `t!`/`tf!` 宏双语，界面语言在「设置」页切换（`config.ini [ui] lang`，未设置时按系统语言探测）
+- **Stack**: Rust + **windows-reactor** (Microsoft's official declarative WinUI 3 framework), giving a genuine native Windows 11 interface.
+- **Native look**: Mica backdrop, Fluent controls, light/dark theme following the system; a 1180×720 client area, with an embedded icon and version resource (`build.rs` reads `APP_VERSION` from `main.rs`).
+- **Game identification**: the user adds a game file by hand (`.exe` / `.elf` / **`ICF1`**). An exe/elf is looked up in the game database by its **CRC** (the algorithm reproduces the mice/kitten sources byte for byte). IDAC/IDZ have no CRC entries; their **ICF1 file** is decrypted to get the appid and version, which are then looked up.
+- **Chinese, English and Japanese**: every user-facing text lives in `locales/zh-CN.yml` / `en.yml` / `ja.yml` and is looked up by key with rust-i18n's `t!` macro (see "Interface languages"). The language is switched on the Settings page (`config.ini [ui] lang`; when unset, it follows the system language).
 
-> **运行前置**：**框架依赖模式**——目标机器需已安装 **Windows App SDK 运行时**（2.x 版本族），未安装/过旧时启动弹系统错误框提示。启动器会检测当前权限，**非管理员时自动以 runas 弹 UAC 重新拉起自身**（netsh 改网卡、awl/openvpn 虚拟网卡均需要）。
+> **Prerequisites**: the launcher is **framework-dependent**: the target machine needs the **Windows App SDK runtime** (2.x family). When it is missing or too old, a system error box is shown at start-up. The launcher checks its privileges and, **when not elevated, relaunches itself through `runas` (UAC)**: changing adapters with netsh and the awl/openvpn virtual adapters all need administrator rights.
 
-## 使用说明
+## Usage
 
-### 1. 放置工具（重要）
+### 1. Placing the tools (important)
 
-启动器启动时自动扫描 **exe 同目录**（最多下钻两层子目录）寻找加载器：`kitten.exe` / `mice.exe` / `mice64.exe` / `inject.exe`。也可在 `data\settings.json` 手工填 `kitten_path` / `mice_path` / `mice64_path` / `segatools_path`（优先于自动检测）。推荐布局：
+At start-up the launcher scans **the folder of its exe** (down to two levels of subfolders) for the loaders `kitten.exe` / `mice.exe` / `mice64.exe` / `inject.exe`. They can also be set by hand in `data\settings.json` as `kitten_path` / `mice_path` / `mice64_path` / `segatools_path` (these take precedence over detection). Recommended layout:
 
 ```
-启动器目录\
+launcher folder\
 ├── launcher.exe
-├── config.ini                  ← 启动器自身设置（首次保存时生成）
-├── data\                       ← 游戏库/设置/缓存（删除即重置）
+├── config.ini                  ← the launcher's own settings (created on first save)
+├── data\                       ← game library / settings / caches (delete to reset)
 └── tools\
-    ├── kitten\                 ← kitten.exe（D4/D5）及其全部依赖
-    ├── mice\                   ← mice.exe / mice64.exe（D6/D7/D8，按游戏位数自动选用）
-    ├── segatools\              ← inject.exe 及依赖；idz\、idac\ 子目录放各游戏 hook dll 等
-    ├── asi-loader\             ← Ultimate-ASI-Loader（dinput8.dll，图形补丁用）
-    ├── shaderfix\              ← shaderfix 插件（随 winmm.dll 部署为游戏目录 scripts\）
-    ├── dependency\             ← picodaemon.exe、cg.dll、cgGL.dll（启动时自动补进游戏目录）
-    ├── awl\                    ← awl-tray.exe（店内对战虚拟局域网）
-    └── openvpn\                ← openvpn.exe（+ wintun.dll，VPN 用）
+    ├── kitten\                 ← kitten.exe (D4/D5) and all its dependencies
+    ├── mice\                   ← mice.exe / mice64.exe (D6/D7/D8, chosen by the game's bitness)
+    ├── segatools\              ← inject.exe and dependencies; idz\ and idac\ hold each game's hook dll etc.
+    ├── asi-loader\             ← Ultimate-ASI-Loader (dinput8.dll, for the graphics patch)
+    ├── shaderfix\              ← shaderfix plugin (deployed with winmm.dll as the game folder's scripts\)
+    ├── dependency\             ← picodaemon.exe, cg.dll, cgGL.dll (copied into the game folder at launch; without the Cg dlls, the installed NVIDIA Cg Toolkit's are used)
+    ├── awl\                    ← awl-tray.exe (in-store versus virtual LAN)
+    └── openvpn\                ← openvpn.exe (+ wintun.dll, for the VPN)
 ```
 
-mice 加载器按游戏位数自动选用：x64 游戏优先 mice64（缺省回退 mice），x86 优先 mice。
+The mice loader is chosen by the game's bitness: x64 games prefer mice64 (falling back to mice), x86 games prefer mice.
 
-### 1.1 kitten 游戏启动流程（自动部署 + 配置生成，仅 D4/D5）
+### 1.1 Launching a kitten game (automatic deployment + config generation, D4/D5 only)
 
-启动游戏**不自动连接/断开 VPN**（需要连远程服务器时先到「VPN 设置」页连接）。
+Launching a game **does not connect or disconnect the VPN** (connect on the "VPN" page first when a remote server is needed).
 
-拉起游戏前按顺序执行：
+Before the game starts, these steps run in order:
 
-1. **读卡器准备**（见 1.4）：从 `tools\dependency\picodaemon.exe` 补齐游戏目录内的 picodaemon，kitten 游戏另补 `cg.dll` / `cgGL.dll`；
-2. 把 **kitten 工具目录顶层文件**复制到游戏目录（与游戏 `.elf` 同层，同名覆盖；跳过 `config.ini`、`*.log`、`sram.bin`、`eeprom.bin`，内容与修改时间一致时幂等跳过）；
-3. 以启动器全局设置（网络/系统/投币/图形/输入设置页）为唯一来源，**完整重建** `<游戏目录>\kitten\config.ini`（见下方映射表）；
-4. 同时**重建** `<游戏目录>\mice\config.ini`（mice 格式、游戏侧 IP，图形设置同样忽略）——读卡器侧的 mice 进程以游戏目录为家，靠它取网络/力反馈等设置；
-5. 启动前校验（见 1.7），通过后以 `kitten.exe -b <游戏文件名>` 启动（cwd = 游戏目录；只传文件名——绝对路径里的空格会被拆开导致 kitten 报 `Failed to parse ELF file`；`CREATE_NO_WINDOW`，不弹 CMD）。
+1. **Card reader preparation** (see 1.4): picodaemon is copied into the game folder from `tools\dependency\picodaemon.exe`; kitten games also get `cg.dll` / `cgGL.dll`.
+2. The **top-level files of the kitten tool folder** are copied into the game folder (next to the game's `.elf`, overwriting files of the same name; `config.ini`, `*.log`, `sram.bin` and `eeprom.bin` are skipped, and a file whose content and modification time already match is left alone).
+3. `<game folder>\kitten\config.ini` is **rebuilt from scratch**, with the launcher's network settings and the game's own settings (its settings page) as its only source (see the mapping table below).
+4. `<game folder>\mice\config.ini` is **rebuilt** as well (mice format, the game-side IP, graphics settings ignored here too): the card reader's mice process uses the game folder as its home and reads network, force feedback and other settings from it.
+5. Pre-launch checks (see 1.7); when they pass, the game starts as `kitten.exe -b <game file name>` (cwd = the game folder; only the file name is passed, because spaces in an absolute path get split and kitten reports `Failed to parse ELF file`; `CREATE_NO_WINDOW`, so no console window appears).
 
-游戏行勾选**「测试模式」**时命令行末尾追加 `-t`。该参数只作用于游戏本体，ServerBox 不带。
+When **"Test mode"** is ticked on the game row, `-t` is appended to the command line. It applies to the game only, never to the ServerBox.
 
-**kitten config.ini 映射**（纯 `键 = 值` 文本、无注释；未设置的键一律不写、空节整节省略，交 kitten 默认值兜底；每次启动整文件重建）：
+**kitten config.ini mapping** (plain `key = value` text without comments; keys that are not set are not written and empty sections are left out, so kitten's defaults apply; the whole file is rebuilt at every launch):
 
-| 启动器设置 | `[节] 键` | 规则 |
+| Launcher setting | `[section] key` | Rule |
 | --- | --- | --- |
-| 图形·关闭默认设置后 | `[display]` | 分辨率 → `dipsw=false` + `width` / `height`；无边框 → `borderless`；渲染倍数 → `render_scale`（2/4/8）；MSAA → `msaa_samples`；各向异性 → `anisotropic`（2/4/8/16）。「使用默认设置」开启时整节省略 |
-| 服务器地址（设置页） | `[network] redirect` | 自定义值，未设置写 `sdgt.arcadehub.xyz` |
-| 网段 | `[network] subnet` | 网段 CIDR 原样（如 `192.168.100.0/24`） |
-| 模拟网络开关 | `[network] simulateNetwork` | 未设置视为开；只有显式关闭写 `false` |
-| 模拟网络 = 关 | `[network] bind_ip` / `game_ip` | ServerBox IP / 主机 IP（网络设置页填写的值） |
-| 日志级别 | `[sysconf] log_level` | error→5 / warn→4 / info→3 / debug→1 / trace→0 |
-| 地区（游戏行） | `[sysconf] region` | JPN→0 / EXP→2 / CHN→2；CHN 自动附 `dipsw=0x3A` |
-| 识别库 game_id | `[sysconf] game_id` | 命中识别库时写出 |
-| Keychip | `[sysconf] keychip_serial` | 原样 |
-| 跳过读卡器初始化 | `[sysconf] skipInitCard` | true/false |
-| 投币 | `[Coins]` | 免费游玩 → `freeplay`；开始/续关/购卡/购车币数 → `start` / `continues` / `card` / `car` |
-| 输入类型 | `[io3] mode` | xinput→1 / dinput→2；输入比率 → `restrict_`（未设置写默认 128） |
-| 输入（仅 xinput） | `[xinput]` | `singleStickSteering`（双摇杆模式的反）、`linearSteering`（默认 true）、`leftStickDeadzone` / `rightStickDeadzone`（32767 × 百分比，默认 20%）；捕获的按键名：`start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `coin` / `accel` / `brake`（未捕获/空白不写；kitten 无 `card` 键） |
-| 输入（仅 dinput） | `[dinput]` | `deviceName` / `pedalsName` / `shifterName`；按钮号 `start` / `viewChg` / `shiftUp` / `shiftDn` / `coin` / `up` / `down` / `left` / `right`（十字键伪码 ≥1000 不写入）；油门/刹车**模拟轴名** `accelAxis` / `brakeAxis`；`reverseAccelAxis` / `reverseBrakeAxis` |
-| 力反馈（恒写出） | `[ffb]` | `enable`（默认 true）、`constantForceStrength` / `damperStrength` / `rumbleStrength` / `rumbleDuration`（默认 100）、`baseDamperStrength` / `deadBand`（默认 20） |
+| Graphics, with defaults turned off | `[display]` | Resolution → `dipsw=false` + `width` / `height`; borderless → `borderless`; render scale → `render_scale` (2/4/8); MSAA → `msaa_samples`; anisotropic → `anisotropic` (2/4/8/16). The whole section is left out while "Use default settings" is on |
+| Server address (Settings page) | `[network] redirect` | The custom value; when unset, `sdgt.arcadehub.xyz` |
+| Subnet | `[network] subnet` | The subnet CIDR as is (e.g. `192.168.100.0/24`) |
+| Simulate network switch | `[network] simulateNetwork` | Unset counts as on; `false` is written only when explicitly turned off |
+| Simulate network = off | `[network] bind_ip` / `game_ip` | ServerBox IP / host IP (the values entered on the Network page) |
+| Log level | `[sysconf] log_level` | error→5 / warn→4 / info→3 / debug→1 / trace→0 |
+| Region (game row) | `[sysconf] region` | JPN→0 / EXP→2 / CHN→2; CHN also adds `dipsw=0x3A` |
+| Database game_id | `[sysconf] game_id` | Written when the game matched the database |
+| Keychip | `[sysconf] keychip_serial` | As is |
+| Skip card reader initialisation | `[sysconf] skipInitCard` | true/false |
+| Coins | `[Coins]` | Free play → `freeplay`; coins for start / continue / card / car → `start` / `continues` / `card` / `car` |
+| Input type | `[io3] mode` | xinput→1 / dinput→2; input ratio → `restrict_` (the default 128 when unset) |
+| Input (xinput only) | `[xinput]` | `singleStickSteering` (the inverse of dual-stick mode), `linearSteering` (default true), `leftStickDeadzone` / `rightStickDeadzone` (32767 × percentage, default 20%); captured button names: `start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `coin` / `accel` / `brake` (not written when not captured or blank; kitten has no `card` key) |
+| Input (dinput only) | `[dinput]` | `deviceName` / `pedalsName` / `shifterName`; button numbers `start` / `viewChg` / `shiftUp` / `shiftDn` / `coin` / `up` / `down` / `left` / `right` (D-pad pseudo codes ≥1000 are not written); throttle/brake **analog axis names** `accelAxis` / `brakeAxis`; `reverseAccelAxis` / `reverseBrakeAxis` |
+| Force feedback (always written) | `[ffb]` | `enable` (default true), `constantForceStrength` / `damperStrength` / `rumbleStrength` / `rumbleDuration` (default 100), `baseDamperStrength` / `deadBand` (default 20) |
 
-### 1.2 mice（RingEdge）游戏启动流程（自动部署 + 配置生成，D6-D8）
+### 1.2 Launching a mice (RingEdge) game (automatic deployment + config generation, D6-D8)
 
-1. **读卡器准备**（同 1.4，kitten 的 cg dll 不需要）；
-2. 把 **mice 工具目录顶层文件**复制到游戏目录（排除 `config.ini` / `idas.ini` / `*.log` / `sram.bin` / `eeprom.bin`）；
-3. 生成 `<游戏目录>\mice\config.ini` 与 `mice\idas.ini`（见下两表）；
-4. 按游戏行的「图形补丁」开关部署 winmm.dll / scripts（见 1.6，游戏目录与 ServerBox 目录都覆盖）；
-5. 字节级改写 D4-D7 的 `initialD.ini`（见 1.5；D8 无此文件静默跳过）；
-6. 校验通过后 `mice.exe -p -b <游戏exe>`（cwd = 游戏目录，`CREATE_NO_WINDOW`；测试模式加 `-t`）。
+1. **Card reader preparation** (as in 1.4; kitten's cg dlls are not needed).
+2. The **top-level files of the mice tool folder** are copied into the game folder (except `config.ini` / `idas.ini` / `*.log` / `sram.bin` / `eeprom.bin`).
+3. `<game folder>\mice\config.ini` and `mice\idas.ini` are generated (see the two tables below).
+4. winmm.dll / scripts are deployed according to the game row's "Graphics patch" switch (see 1.6; both the game folder and the ServerBox folder).
+5. `initialD.ini` of D4-D7 is rewritten byte by byte (see 1.5; D8 has no such file and is skipped silently).
+6. When the checks pass: `mice.exe -p -b <game exe>` (cwd = the game folder, `CREATE_NO_WINDOW`; test mode adds `-t`).
 
-**config.ini**（复刻 kitten 做法：纯键值、已设置的键才写出；每次整文件重建；未设置网段时网络派生键全部省略）：
+**config.ini** (done the way kitten's is: plain key/value, only keys that are set are written; rebuilt at every launch; while no subnet is set, every network-derived key is left out):
 
-| 启动器设置 | `[节] 键` | 规则 |
+| Launcher setting | `[section] key` | Rule |
 | --- | --- | --- |
-| ——固定 | `[mice] apply_patches` | 恒 `false` |
-| 日志级别 | `[mice] log_level` | error→2 / warn→3 / info→4 / debug→5 / trace→6；未设置写 4（info 默认） |
-| Keychip | `[sysconf] keychip_serial` | 原样；未设置不写 |
-| 地区（游戏行） | `[sysconf] region` | JPN→1 / EXP→4 / CHN→8；未设置不写 |
-| 投币·免费游玩 | `[sysconf] freeplay` | true/false |
-| 网段 CIDR | `[sysconf] keychip_subnet` | 原样 |
-| 网段 → 推导 | `[network] ip_address` | 网段基址 + **101（游戏目录）** / + **102（ServerBox 目录）**；房间模式下成员写分配的机位 IP |
-| 网段 → 推导 | `[network] subnet_mask` | 前缀换算（/24 → 255.255.255.0） |
-| 网段 → 推导 | `[network] gateway`、`primary_dns` | 网段末地址（broadcast − 1） |
-| 服务器地址 | `[network] naominet_jp`、`aime_naominet_jp` | 自定义值或默认 `sdgt.arcadehub.xyz` |
-| ——固定 | `[network] ib_naominet_jp` | `127.0.0.1` |
-| 图形·使用默认=true | —— | `[window]` 整节省略 |
-| 图形·无边框 / 分辨率 | `[window] borderless / dipsw / w / h` | 分辨率同时写 `dipsw = false` |
-| 力反馈（恒写出） | `[ffb]` | 同 kitten 表 |
-| 模拟网络=关 且目标是 ServerBox | `[ServerBox] bind_ip` | ServerBox IP（房间模式写 `172.10.1.102`） |
+| (fixed) | `[mice] apply_patches` | Always `false` |
+| Log level | `[mice] log_level` | error→2 / warn→3 / info→4 / debug→5 / trace→6; 4 (the info default) when unset |
+| Keychip | `[sysconf] keychip_serial` | As is; not written when unset |
+| Region (game row) | `[sysconf] region` | JPN→1 / EXP→4 / CHN→8; not written when unset |
+| Coins, free play | `[sysconf] freeplay` | true/false |
+| Subnet CIDR | `[sysconf] keychip_subnet` | As is |
+| Derived from the subnet | `[network] ip_address` | Subnet base + **101 (game folder)** / + **102 (ServerBox folder)**; in room mode a member writes the seat IP it was given |
+| Derived from the subnet | `[network] subnet_mask` | From the prefix (/24 → 255.255.255.0) |
+| Derived from the subnet | `[network] gateway`, `primary_dns` | The last address of the subnet (broadcast − 1) |
+| Server address | `[network] naominet_jp`, `aime_naominet_jp` | The custom value or the default `sdgt.arcadehub.xyz` |
+| (fixed) | `[network] ib_naominet_jp` | `127.0.0.1` |
+| Graphics, use defaults = true | — | The whole `[window]` section is left out |
+| Graphics, borderless / resolution | `[window] borderless / dipsw / w / h` | A resolution also writes `dipsw = false` |
+| Force feedback (always written) | `[ffb]` | As in the kitten table |
+| Simulate network = off and the target is the ServerBox | `[ServerBox] bind_ip` | ServerBox IP (`172.10.1.102` in room mode) |
 
-**idas.ini**：
+**idas.ini**:
 
-| 启动器设置 | `[节] 键` | 规则 |
+| Launcher setting | `[section] key` | Rule |
 | --- | --- | --- |
-| ——固定 | `[ServerBox] offlineMode` | 恒 `false` |
-| 模拟网络开关 | `[ServerBox] simulateNetwork` | 未设置视为开 |
-| 跳过读卡器初始化 | `[ServerBox] skipInitialization` | 同向且**始终写出**（未设置→false） |
-| 自动插卡 | `[CardReader] auto_insert` | **始终写出**（未设置→false） |
-| 选用卡片 | `[CardReader] cardfile` | 该游戏选用的卡片；未选用不写 |
-| 模拟网络=关 | `[ServerBox] bind_ip` / `game_ip` | ServerBox IP / 主机 IP |
-| 投币·开始/续关/购卡/购车 | `[Coins] start / continues / card / car` | 数值；未填的键跳过 |
-| 图形·渲染倍数 | `[Graphics] render_scale` | 2x→2 / 4x→3 / 8x→4；**仅游戏侧**——ServerBox 侧不写 |
-| 输入类型 / 比率 | `[io3] mode / restrict_` | 字符串 xinput/dinput；未设置比率写默认 128 |
-| 输入（仅 xinput） | `[xinput]` | `deviceIndex`（手柄槽位，默认 0）、`singleStickSteering` / `linearSteering` / 左右摇杆死区；捕获按钮名：`start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `coin` / **`card`** / `accel` / `brake` |
-| 输入（仅 dinput） | `[dinput]` | `deviceName` / `pedalsName` / `shifterName`；按钮号 `start` / `viewChg` / `shiftUp` / `shiftDn` / `coin` / **`card`** / `up` / `down` / `left` / `right`（十字键伪码跳过）；`accelAxis` / `brakeAxis`；`reverseAccelAxis` / `reverseBrakeAxis` |
+| (fixed) | `[ServerBox] offlineMode` | Always `false` |
+| Simulate network switch | `[ServerBox] simulateNetwork` | Unset counts as on |
+| Skip card reader initialisation | `[ServerBox] skipInitialization` | Same value, **always written** (unset → false) |
+| Auto-insert card | `[CardReader] auto_insert` | **Always written** (unset → false) |
+| Selected card | `[CardReader] cardfile` | The card chosen for this game; not written when none is chosen |
+| Simulate network = off | `[ServerBox] bind_ip` / `game_ip` | ServerBox IP / host IP |
+| Coins, start / continue / card / car | `[Coins] start / continues / card / car` | Numbers; keys left empty are skipped |
+| Graphics, render scale | `[Graphics] render_scale` | 2x→2 / 4x→3 / 8x→4; **game side only**, never written on the ServerBox side |
+| Input type / ratio | `[io3] mode / restrict_` | The strings xinput/dinput; the default 128 when no ratio is set |
+| Input (xinput only) | `[xinput]` | `deviceIndex` (controller slot, default 0), `singleStickSteering` / `linearSteering` / left and right stick dead zones; captured button names: `start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `coin` / **`card`** / `accel` / `brake` |
+| Input (dinput only) | `[dinput]` | `deviceName` / `pedalsName` / `shifterName`; button numbers `start` / `viewChg` / `shiftUp` / `shiftDn` / `coin` / **`card`** / `up` / `down` / `left` / `right` (D-pad pseudo codes are skipped); `accelAxis` / `brakeAxis`; `reverseAccelAxis` / `reverseBrakeAxis` |
 
-> **注意**：config.ini 与 idas.ini 都是**每次启动整文件重建**（内容无变化时跳过写入，不改 mtime），请勿手工修改游戏目录内的这两份文件；`[drivers]`、`[hooks]`、`[keys]` 等启动器没有对应项的节不在生成范围，维持 mice 默认。
+> **Note**: config.ini and idas.ini are both **rebuilt from scratch at every launch** (the write is skipped when nothing changed, so the mtime stays), so do not edit these two files in the game folder by hand. Sections the launcher has no setting for, such as `[drivers]`, `[hooks]` and `[keys]`, are not generated and keep mice's defaults.
 
-### 1.3 segatools（IDAC / IDZ）游戏启动流程
+### 1.3 Launching a segatools game (IDAC / IDZ)
 
-仅对**加载器 = segatools** 的游戏（SDGT = IDAC 各赛季、SDDF = Zero、SDER = Zero CHN）生效。启动顺序：
+This applies only to games whose **loader is segatools** (SDGT = the IDAC seasons, SDDF = Zero, SDER = Zero CHN). Launch order:
 
-1. **生成 segatools.ini**：把 **segatools 工具目录顶层文件**复制到 **amdaemon.exe 所在目录**（跳过 `*.log` 与另一游戏的 hook dll），再把 `idz\`（IDZ）或 `idac\`（IDAC）子目录内的 `*.dll` 复制过去、删除残留的另一游戏 hook dll；IDAC 必须存在 `idac\config_hook.json`（缺失报错），会一并复制；创建 `option\`、`appdata\` 目录；IDAC 另按版本号复制 spike 文件（`idac\spike\indrun-<版本前三位数字>.txt`，如 `3.41.00 → indrun-341.txt`，工具目录内没有该文件则不写 `spike` 键）；
-2. **拉起 amdaemon**：`inject.exe -d -k <idzhook.dll | idachook.dll> amdaemon.exe -c <配置清单>`（cwd = amdaemon 目录）。配置清单按 game_id 区分：
-   - **IDAC（SDGT）**：22 个 `config_*.json`（common/ex/jp、laninstall、aime、seat_1~4/single、config_hook.json）；
-   - **IDZ（SDDF）**：7 个 `configDHCP_Final_*.json`（Common + JP/EX 各 ST1/ST2）；
-   - **IDZ（SDER）**：4 个（Common + ZH 各 ST1/ST2）；
-3. **拉起游戏本体**：`inject.exe -d -k <hook dll> <游戏主程序>`（cwd = amdaemon 目录，`CREATE_NO_WINDOW`）：
-   - **IDZ**：主程序如 `InitialD0_DX11_Nu.exe`，仅追加 `-m`；
-   - **IDAC**：主程序为 `GameProject-Win64-Shipping.exe`，追加 `-culture=<ja|en>`（地区 JPN→ja，其余 en）、`launch=Cabinet`、`ABSLOG=<Userdata>\GameProject.log`、`-Master`、`UserDir=<Userdata 绝对路径>`、`-NotInstalled`、`-UNATTENDED`（Userdata 目录从 amdaemon 目录向上最多 5 层查找）；
-4. 游戏退出时 kill amdaemon 并 `taskkill` 兜底。
+1. **Generate segatools.ini**: the **top-level files of the segatools tool folder** are copied into **the folder of amdaemon.exe** (skipping `*.log` and the other game's hook dll), then the `*.dll` files of the `idz\` (IDZ) or `idac\` (IDAC) subfolder are copied there and a leftover hook dll of the other game is deleted. IDAC requires `idac\config_hook.json` (an error when missing), which is copied too. The `option\` and `appdata\` folders are created. IDAC also gets the spike file for its version (`idac\spike\indrun-<first three digits of the version>.txt`, e.g. `3.41.00 → indrun-341.txt`; when the tool folder has no such file, the `spike` key is not written).
+2. **Start amdaemon**: `inject.exe -d -k <idzhook.dll | idachook.dll> amdaemon.exe -c <config list>` (cwd = the amdaemon folder). The config list depends on the game_id:
+   - **IDAC (SDGT)**: 22 `config_*.json` files (common/ex/jp, laninstall, aime, seat_1~4/single, config_hook.json);
+   - **IDZ (SDDF)**: 7 `configDHCP_Final_*.json` files (Common + JP/EX, each ST1/ST2);
+   - **IDZ (SDER)**: 4 files (Common + ZH, each ST1/ST2).
+3. **Start the game itself**: `inject.exe -d -k <hook dll> <game executable>` (cwd = the amdaemon folder, `CREATE_NO_WINDOW`):
+   - **IDZ**: the executable is e.g. `InitialD0_DX11_Nu.exe`, with only `-m` appended;
+   - **IDAC**: the executable is `GameProject-Win64-Shipping.exe`, with `-culture=<ja|en>` (region JPN→ja, otherwise en), `launch=Cabinet`, `ABSLOG=<Userdata>\GameProject.log`, `-Master`, `UserDir=<absolute Userdata path>`, `-NotInstalled` and `-UNATTENDED` appended (the Userdata folder is searched for up to 5 levels above the amdaemon folder).
+4. When the game exits, amdaemon is killed, with `taskkill` as a fallback.
 
-**segatools.ini 映射**（纯键值、未设置不写、空节整节省略；每次整文件重建）：
+**segatools.ini mapping** (plain key/value, unset keys not written, empty sections left out; rebuilt at every launch):
 
-| 启动器设置 | `[节] 键` | 规则 |
+| Launcher setting | `[section] key` | Rule |
 | --- | --- | --- |
-| ——固定 | `[vfs] amfs / option / appdata`、`[netenv] enable=1`、`[system] enable=1`、`[led15070] enable=1` | 恒写出 |
-| ——固定 | `[aime] enable=1` | 恒写出 |
-| 选用卡片 | `[aime] aimePath` | `DEVICE\<20位卡号>.txt`；IDZ 未选卡时回退写 `DEVICE\aime.txt`，IDAC 未选卡不写 |
-| ——固定（仅 IDZ） | `[aime] felicaGen=0`、`aimeGen=1` | 恒写出 |
-| 服务器地址 | `[dns] default` | 自定义值或默认域名；`router` 恒 `10.0.0.254` |
-| 主机 IP（仅 IDZ） | `[netenv] addrSuffix` | 主机 IP 末字节（房间内即机位号）；未配置不写 |
-| Keychip | `[keychip] id` | 原样 |
-| 识别库 game_id | `[keychip] gameId` | 命中时写出 |
-| 网段 | `[keychip] subnet` | 网段基址（不带前缀）；房间模式写房间网段 `172.10.1.0` |
-| 地区（游戏行） | IDAC → `[keychip] region`；IDZ → `[ds] region` | JPN→1 / EXP→4 / CHN→8 |
-| ——固定（仅 IDZ） | `[pcbid] serialNo`、`[ds] serialNO` | 每次启动随机生成（`ACAE01A########` / `AAVE-01A########`） |
-| 投币·免费游玩 | `[system] freeplay` | 1/0 |
-| 主机 checkbox | IDZ → `[gpio] dipsw1`；IDAC → `[system] dipsw1` | 1=主机 |
-| 机位（仅 IDAC） | `[system] dipsw2~5` | SINGLE→(0,1,0,0)、A1→(0,0,0,0)、A2→(0,1,0,0)、B1→(0,0,1,0)、B2→(0,1,1,0) |
-| ——固定（仅 IDAC） | `[indrun] enable=1`（+ 可选 `spike`） | 恒写出 |
-| ——固定（仅 IDZ） | `[gfx] enable=1`、`windowed=1` | 图形钩子恒开、恒窗口化；关闭「使用默认设置」后追加 `width` / `height`（未选分辨率写默认 1920×1080，解析失败同样回退）与 `framed`（无边框→0，否则 1）。IDAC 无 `[gfx]` 节 |
-| 输入类型 / 比率 | IDAC → `[io4]`；IDZ → `[io3]`：`mode` / `restrict` | xinput/dinput；未设置比率写默认 128 |
-| 输入（仅 xinput） | `[xinput]` | `autoNeutral=1`、`singleStickSteering` / `linearSteering` / 左右死区；捕获按钮名 `start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `coin` / `accel` / `brake`；**刷卡键**写 `[aime] xiScan` + `xiDeviceIndex`（手柄槽位），不写 `[xinput] card` |
-| 输入（仅 dinput） | `[dinput]` | 设备名三件套、`accelAxis` / `brakeAxis`、按钮号（十字键伪码跳过）`start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `gear1~6`、`reverseAccelAxis` / `reverseBrakeAxis`；力反馈强度键也在此节：`constantForceStrength` / `damperStrength` / `rumbleStrength` / `rumbleDuration` / `baseDamperFraction` / `deadband` |
-| 力反馈开关 | `[ffb] enable` | 未设置视为开 |
+| (fixed) | `[vfs] amfs / option / appdata`, `[netenv] enable=1`, `[system] enable=1`, `[led15070] enable=1` | Always written |
+| (fixed) | `[aime] enable=1` | Always written |
+| Selected card | `[aime] aimePath` | `DEVICE\<20-digit card number>.txt`; when no card is chosen IDZ falls back to `DEVICE\aime.txt` and IDAC writes nothing |
+| (fixed, IDZ only) | `[aime] felicaGen=0`, `aimeGen=1` | Always written |
+| Server address | `[dns] default` | The custom value or the default domain; `router` is always `10.0.0.254` |
+| Host IP (IDZ only) | `[netenv] addrSuffix` | The last byte of the host IP (the seat number inside a room); not written when not configured |
+| Keychip | `[keychip] id` | As is |
+| Database game_id | `[keychip] gameId` | Written when matched |
+| Subnet | `[keychip] subnet` | The subnet base (without prefix); `172.10.1.0`, the room subnet, in room mode |
+| Region (game row) | IDAC → `[keychip] region`; IDZ → `[ds] region` | JPN→1 / EXP→4 / CHN→8 |
+| (fixed, IDZ only) | `[pcbid] serialNo`, `[ds] serialNO` | Generated at random at every launch (`ACAE01A########` / `AAVE-01A########`) |
+| Coins, free play | `[system] freeplay` | 1/0 |
+| Host checkbox | IDZ → `[gpio] dipsw1`; IDAC → `[system] dipsw1` | 1 = host |
+| Seat (IDAC only) | `[system] dipsw2~5` | SINGLE→(0,1,0,0), A1→(0,0,0,0), A2→(0,1,0,0), B1→(0,0,1,0), B2→(0,1,1,0) |
+| (fixed, IDAC only) | `[indrun] enable=1` (+ optional `spike`) | Always written |
+| (fixed, IDZ only) | `[gfx] enable=1`, `windowed=1` | The graphics hook is always on and always windowed; with "Use default settings" turned off, `width` / `height` are added (1920×1080 when no resolution is chosen or it fails to parse) and `framed` (borderless → 0, otherwise 1). IDAC has no `[gfx]` section |
+| Input type / ratio | IDAC → `[io4]`; IDZ → `[io3]`: `mode` / `restrict` | xinput/dinput; the default 128 when no ratio is set |
+| Input (xinput only) | `[xinput]` | `autoNeutral=1`, `singleStickSteering` / `linearSteering` / left and right dead zones; captured button names `start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `coin` / `accel` / `brake`; the **card scan button** goes to `[aime] xiScan` + `xiDeviceIndex` (controller slot), not to `[xinput] card` |
+| Input (dinput only) | `[dinput]` | The three device names, `accelAxis` / `brakeAxis`, button numbers (D-pad pseudo codes skipped) `start` / `viewChg` / `up` / `down` / `left` / `right` / `shiftDn` / `shiftUp` / `gear1~6`, `reverseAccelAxis` / `reverseBrakeAxis`; the force feedback strengths are in this section too: `constantForceStrength` / `damperStrength` / `rumbleStrength` / `rumbleDuration` / `baseDamperFraction` / `deadband` |
+| Force feedback switch | `[ffb] enable` | Unset counts as on |
 
-### 1.4 读卡器（picodaemon）
+### 1.4 Card reader (picodaemon)
 
-kitten / mice 游戏**启动前**自动准备读卡器（segatools 游戏自带 aime 模拟，无读卡器）：
+kitten and mice games get their card reader prepared **before launch** (segatools games emulate aime themselves and have no card reader process):
 
-1. **自动补齐**：游戏目录内没有 `picodaemon.exe`（或已有但识别 CRC 不对）时，从 `tools\dependency\picodaemon.exe` 复制一份过去；缺失时报错中止；kitten 游戏同时补 `cg.dll` / `cgGL.dll`；
-2. 把 mice 工具目录的 **`mice.exe` 与 `mice.dll`** 复制到游戏目录（同名覆盖、幂等跳过）；
-3. 写 `<游戏目录>\mice\idas.ini`：`[CardReader] auto_insert`（系统设置页「自动插卡」开关）与 `cardfile`（该游戏选用的卡片）、`[ServerBox] game_ip`（本机游戏 IP）；
-   - **仅 kitten 游戏**另写输入后端与插卡键：`[io3] mode`（按输入设置页类型）与 `[xinput] card`（捕获的插卡键按钮名，未捕获不写）——kitten 游戏进程不处理插卡，由读卡器侧 mice 读取；
-   - **mice 游戏**该文件随后由 1.2 的配置生成整体重建（插卡键 `card` 已含在游戏侧 idas.ini，读卡器侧不重复写）；
-4. 以 `<游戏目录>\mice.exe -p -b picodaemon.exe` 启动（cwd = 游戏目录，**该 CMD 窗口保留可见**），等 1 秒再拉游戏；游戏退出时一并关闭。
+1. **Provisioning**: when the game folder has no `picodaemon.exe` (or has one whose CRC is not a known one), a copy is taken from `tools\dependency\picodaemon.exe`; if that is missing, the launch stops with an error. kitten games also get `cg.dll` / `cgGL.dll`: both from `tools\dependency\` when it has both, otherwise both from the installed NVIDIA Cg Toolkit (the folder its installer records in `CG_BIN_PATH`).
+2. **`mice.exe` and `mice.dll`** of the mice tool folder are copied into the game folder (overwriting files of the same name, skipping identical ones).
+3. `<game folder>\mice\idas.ini` is written: `[CardReader] auto_insert` (the "Auto-insert card" switch on the System tab of the game's settings page) and `cardfile` (the card chosen for this game), `[ServerBox] game_ip` (this machine's game IP).
+   - **kitten games only** also get the input backend and the card button: `[io3] mode` (from the input type on the game's Input tab) and `[xinput] card` (the captured card button's name, not written when not captured). The kitten game process does not handle card insertion; the reader-side mice reads it.
+   - For **mice games** this file is then rebuilt as a whole by the config generation of 1.2 (the `card` button is already in the game-side idas.ini, so the reader side does not write it again).
+4. The reader starts as `<game folder>\mice.exe -p -b picodaemon.exe` (cwd = the game folder; **its console window stays visible**); the launcher waits 1 second before starting the game, and closes the reader when the game exits.
 
-### 1.5 initialD.ini 私服改写（D4-D7）
+### 1.5 Rewriting initialD.ini for a private server (D4-D7)
 
-启动 D4-D7 前，启动器按识别库 `game_id`（SBML/SBQZ/SBTS→idas4/5、SBUU/SBVW/SBWV→6、SBYD/SBYY→7）判定，命中后改写**游戏目录**内的 `initialD.ini`（大小写不敏感查找）。改写以**字节级**逐行进行（保留原 Shift-JIS 编码、日文注释、CRLF 与对齐空格，只替换 `=` 之后的值；写入走临时文件原子替换，内容无变化不动文件）：
+Before D4-D7 start, the launcher decides from the database `game_id` (SBML/SBQZ/SBTS → idas4/5, SBUU/SBVW/SBWV → 6, SBYD/SBYY → 7) whether to rewrite `initialD.ini` in the **game folder** (found case-insensitively). The rewrite works **line by line on the raw bytes**: the original Shift-JIS encoding, the Japanese comments, CRLF and alignment spaces are kept and only the value after `=` is replaced; the file is written through a temporary file and an atomic replace, and left untouched when nothing changes:
 
-1. 所有含 `SERVER_ADDR` 的配置项（MATCH / USERDB / EVENT / SCREENSHOT / CARDB 等）→ 设置页「服务器地址」（未设置回退默认 `sdgt.arcadehub.xyz`）
+1. Every key containing `SERVER_ADDR` (MATCH / USERDB / EVENT / SCREENSHOT / CARDB, …) → the "Server address" from the Settings page (the default `sdgt.arcadehub.xyz` when unset)
 2. `MATCH_SERVER_PORT_TCP_*` → `10003`
-3. `MATCH_SERVER_PORT_UDP_SEND_*` 与 `TAG_MATCH_SERVER_PORT_UDP_SEND_*` → `12353`
-4. `MATCH_SERVER_PORT_UDP_RECV_*` 与 `TAG_MATCH_SERVER_PORT_UDP_RECV_*` → `12354`
+3. `MATCH_SERVER_PORT_UDP_SEND_*` and `TAG_MATCH_SERVER_PORT_UDP_SEND_*` → `12353`
+4. `MATCH_SERVER_PORT_UDP_RECV_*` and `TAG_MATCH_SERVER_PORT_UDP_RECV_*` → `12354`
 5. `USERDB_SERVER_PORT_TCP_*` → `10000`
 6. `EVENT_SERVER_PORT_TCP_*` → `10000`
-7. `ADV_NEWS_SERVER_URL_*` → `http://<服务器地址>:8086/idas<N>/news/news50.txt`（N = 版本 4~7）
+7. `ADV_NEWS_SERVER_URL_*` → `http://<server address>:8086/idas<N>/news/news50.txt` (N = version 4~7)
 
-所有序号（D5 的 `_0~_3`、D6/D7 的 `_0~_15`）全部改成同一目标值；被 `;`/`#` 注释掉的行、`TAG_MATCH_SERVER_PORT_TCP_*`、`STORE_*` 等未列出的键均不动；非 D4-D7 或文件缺失时静默跳过，不阻断启动。改写幂等。
+Every index (`_0~_3` on D5, `_0~_15` on D6/D7) gets the same value. Lines commented out with `;` / `#`, `TAG_MATCH_SERVER_PORT_TCP_*`, `STORE_*` and other keys not listed are left alone. Games other than D4-D7, or a missing file, are skipped silently without blocking the launch. The rewrite is idempotent.
 
-### 1.6 图形补丁（winmm.dll + shaderfix）
+### 1.6 Graphics patch (winmm.dll + shaderfix)
 
-mice 游戏与 kitten 的 ServerBox 支持**图形补丁**（游戏行展开卡片里的开关，仅 mice 游戏行显示，默认开）：
+mice games and kitten ServerBoxes support a **graphics patch** (a switch in the game row's expanded card, shown only on mice game rows, on by default):
 
-- 开启：把 `tools\asi-loader\` 内的 `dinput8.dll`（Ultimate-ASI-Loader，可在子目录递归查找）复制为目标目录的 **`winmm.dll`**；再把 `tools\shaderfix\` 的全部文件平铺复制到目标目录 **`scripts\`**；
-- 关闭：删除目标目录已有的 `winmm.dll`（scripts 留置不动）；
-- 覆盖范围：mice 游戏 = 游戏目录 + 其 ServerBox 目录；kitten 游戏 = 仅 ServerBox 目录（且开关开启时若未安装 asi-loader 组件会报错提示先到设置页更新）；
-- **图形设置**（分辨率/无边框等）仍只作用于游戏本体：ServerBox 侧生成的配置一律剔除图形键（kitten `[display]`、mice `[window]`/`render_scale`、segatools 整份 graphics 清空）。
+- On: `dinput8.dll` from `tools\asi-loader\` (Ultimate-ASI-Loader, searched recursively in subfolders) is copied as **`winmm.dll`** into the target folder, then every file of `tools\shaderfix\` is copied flat into the target folder's **`scripts\`**.
+- Off: an existing `winmm.dll` in the target folder is deleted (scripts is left in place).
+- Scope: mice games = the game folder + its ServerBox folder; kitten games = the ServerBox folder only (and with the switch on, a missing asi-loader component is an error asking to update it on the Settings page first).
+- The **graphics settings** (resolution, borderless, …) still apply to the game only: configs generated for the ServerBox always drop the graphics keys (kitten `[display]`, mice `[window]` / `render_scale`, the whole segatools graphics set).
 
-### 1.7 启动前校验与进程生命周期
+### 1.7 Pre-launch checks and process lifetime
 
-点「启动」后（启动面板遮罩显示进度，失败弹「启动失败」可跳转对应设置页）：
+After "Launch" is clicked (the launch panel overlay shows progress; on failure a "Launch failed" dialog can jump to the relevant settings page):
 
-1. **通用校验**：地区已设置（游戏行下拉，**必填**；`[system] region` 旧全局值仅作为配置生成的回退，不满足此项）→ Keychip 已填写 → 网段已配置（segatools 允许以房间网络替代）；
-2. **kitten/mice 附加**：dinput 模式不支持 H 排挡（拒绝并跳转输入页）；已选车卡；已配置 ServerBox；
-3. **segatools 附加**：已选车卡、已配置 amdaemon.exe 与游戏主程序；
-4. 顺序拉起：读卡器（1s）→ [segatools：amdaemon] → 游戏；任一环节失败即中止并连带关闭已拉起进程；
-5. **ServerBox 静态 IP**：模拟网络关闭且不在房间模式时，若网卡当前 IPv4 少于 2 个，用 `netsh` 在所选网卡上加一条 ServerBox IP 的静态地址（开启 DHCP 静态共存）；游戏退出/手动关闭时自动删除；
-6. **退出清理**：轮询游戏进程（1s），退出后 kill 读卡器与 amdaemon 子进程，`taskkill /f /im` 兜底清理 `amdaemon.exe` 与 ServerBox 进程名（IDZ 游戏额外清理 `ServerBoxD8_Nu_x64.exe` / `ServerBoxD8_Nu_x64_CHN.exe`），删除上面加的静态 IP，并累计游玩次数 / 最近游玩时间入库。
+1. **Common checks**: the region is set (the game row drop-down, **required**; the old global `[system] region` is used only as a fallback when generating configs and does not satisfy this check) → the keychip is filled in → a subnet is configured (segatools accepts the room network instead).
+2. **kitten/mice extras**: dinput mode does not support an H-pattern shifter (refused, jumping to the Input tab of the game's settings page); a car card is selected; a ServerBox is configured.
+3. **segatools extras**: a car card is selected; amdaemon.exe and the game executable are configured.
+4. Start-up order: card reader (1 s) → [segatools: amdaemon] → game. If any step fails, the launch stops and the processes already started are closed too.
+5. **ServerBox static IP**: when the network is not simulated and not in room mode, and the adapter currently has fewer than 2 IPv4 addresses, `netsh` adds the ServerBox IP as a static address on the chosen adapter (DHCP and static coexisting). It is removed automatically when the game exits or is closed by hand.
+6. **Clean-up on exit**: the game process is polled (1 s); after it exits, the card reader and amdaemon child processes are killed, `taskkill /f /im` cleans up `amdaemon.exe` and the ServerBox process names (IDZ games also `ServerBoxD8_Nu_x64.exe` / `ServerBoxD8_Nu_x64_CHN.exe`), the static IP added above is removed, and the play count and last-played time are stored in the library.
 
-### 1.8 ServerBox（手动启动）
+### 1.8 ServerBox (started by hand)
 
-ServerBox **不再随游戏自动拉起**，改为在游戏行（或房间页）按需点「启动」，点「关闭」或游戏退出时结束：
+The ServerBox is **no longer started together with the game**. It is started on demand with "Launch" on the game row (or the room page), and ends on "Close" or when the game exits:
 
-- **mice**：先部署（复制工具文件 + 生成 ServerBox 目录的 `mice\config.ini`，`ip_address` = 网段基址+102；`idas.ini` 同步生成，图形键剔除），再 `mice.exe -b <ServerBox exe>`（cwd = ServerBox 目录）；
-- **kitten**：先按开关部署图形补丁到 ServerBox 目录，再走一遍 kitten 部署（工具文件 + `kitten\config.ini` + `mice\config.ini`，图形键剔除），然后 `kitten.exe -b <ServerBox 文件>`；
-- **segatools**：暂不支持 ServerBox（明确报错）；
-- ServerBox 文件与游戏不能同目录；CRC 必须等于识别库中该构建的 `sb_crc`。
+- **mice**: deploy first (copy the tool files + generate `mice\config.ini` in the ServerBox folder with `ip_address` = subnet base + 102; `idas.ini` is generated too, without graphics keys), then `mice.exe -b <ServerBox exe>` (cwd = the ServerBox folder).
+- **kitten**: deploy the graphics patch to the ServerBox folder according to the switch, run the kitten deployment once more (tool files + `kitten\config.ini` + `mice\config.ini`, without graphics keys), then `kitten.exe -b <ServerBox file>`.
+- **segatools**: the ServerBox is not supported yet (an explicit error).
+- The ServerBox file must not be in the game's folder, and its CRC must equal the `sb_crc` of that build in the database.
 
-### 2. 添加游戏
+### 2. Adding games
 
-顶栏 **「＋ 添加游戏」** → 系统文件对话框选择 `.exe` / `.elf` / `ICF1`：
+**"+ Add game"** in the top bar opens the system file dialog with `.exe`, `.elf`, `ICF1`, and the extensionless `main` file used by Maximum Tune 3 / 3DX / 3DX+ visible by default.
 
-- **exe / elf**：后台按文件类型（PE→mice、ELF32→kitten）计算 CRC 并查识别库——命中即以产品名 + 构建版本入库（封面用识别库 `image` 指定的**内置封面图**，如 `logo_D8.png`）；未命中弹命名窗口（加载器按文件类型自动选择：ELF→kitten，EXE→mice）；
-- **ICF1**（IDAC/IDZ 的加密版本信息文件）：AES-128-CBC 固定密钥解密 + 双重 CRC32 校验，取 appid 与 `major.minor.build` 版本号（如 `SDGT 3.41.00`）查识别库 `game_id + version` 命中入库；未收录的 id/version 报错。
+- **exe / elf / main**: in the background the CRC is computed by file type (PE → mice, ELF32 → kitten) and looked up in the database. On a match the game is added with the product name + build version (the cover is the **built-in cover image** named by the database's `image`, e.g. `logo_D8.png`); otherwise a naming dialog opens (the loader follows the file type: ELF → kitten, EXE → mice).
+- **ICF1** (the encrypted version information file of IDAC/IDZ): decrypted with AES-128-CBC and a fixed key, checked with two CRC32s, and the appid and `major.minor.build` version (e.g. `SDGT 3.41.00`) are looked up as `game_id + version`. An id/version not in the database is an error.
 
-### 3. 界面布局（Win11 设置风格）
+### 3. Interface layout (Windows 11 Settings style)
 
-**顶栏**：标题 + DNET 网站链接（`https://dnet.arcadehub.xyz`）+「＋ 添加游戏」。
-**左侧导航**：游戏 / 店内对战 / 图形设置 / 网络设置 / VPN 设置 / 系统设置 / 输入设置 / 设置（卡片选择页不在导航中，从游戏行进入）。
+**Top bar**: title + DNET website link (`https://dnet.arcadehub.xyz`) + "+ Add game".
+**Navigation on the left**: Games / In-store versus / Network / VPN / Settings (the card selection page and a game's settings page are not in the navigation; they are opened from a game row).
 
-**游戏页**：Win11 设置风格长条卡片列表——每行「封面缩略图（用户设置过则用文件，否则内置封面，再否则首字占位）+ 游戏名 + 副标题（版本 · game_id · ServerBox 已配置）+ 平台徽章（Lindbergh / RingEdge / ALLS / Nu）+ 行尾箭头」。点击行头就地展开配置卡片：
+**Games page**: a list of long cards in the Windows 11 Settings style. The games are listed under a heading per series (Initial D, then Wangan Midnight Maximum Tune; the family decides), each by the release date of its database product, with versions out the same day in the database's order (JPN, EXP, CHN); a game the database does not know comes last in its series, in the order added. Only the display is sorted: `library.json` keeps the order added, since row actions refer to games by their place in it. Each row has "cover thumbnail (the user's file if set, otherwise the built-in cover of its database product (`image`, with `<name>_big.png` on the launch panel), otherwise the "work in progress" image `src/assets/cover_wip.png`, which a game the database does not know shows; the database's cover and platform are preferred to those saved in `library.json` when the game was added, so a newer database shows on games added before) + game name + subtitle (version · game_id · ServerBox configured) + platform badge (Lindbergh / RingEdge / ALLS / Nu) + an arrow at the end". Clicking the row header expands its configuration card in place:
 
-| 行 | 说明 |
+| Row | Description |
 | --- | --- |
-| **启动游戏** | 「启动」按钮；kitten/mice 另有「测试模式」勾选；运行中变为「关闭」 |
-| **图形补丁**（仅 mice） | 开关，见 1.6 |
-| **卡片选择** | 显示当前卡片（segatools 显示 `<卡号>.txt`，其余 `.png`），「进入」进卡片页 |
-| **Region** | 下拉 JPN / EXP / CHN（**必填**，每游戏独立） |
-| **ServerBox** | 添加 / 启动 / 更换 / 移除；运行中变「关闭」；仅命中构建带 `sb_crc` 的游戏显示 |
-| **amdaemon.exe / 游戏主程序**（仅 segatools） | 记录文件路径，添加 / 更换 / 移除 |
-| **移除游戏** | 确认后删除（含封面缓存） |
+| **Launch game** | The "Launch" button; kitten/mice also have a "Test mode" checkbox; while running it becomes "Close" |
+| **Graphics patch** (mice only) | A switch, see 1.6 |
+| **Card selection** | Shows the current card (segatools shows `<card number>.txt`, the others `.png`); "Open" opens the card page |
+| **Region** | Drop-down JPN / EXP / CHN (**required**, per game) |
+| **ServerBox** | Add / launch / change / remove; "Close" while running; shown only for games whose matched build has an `sb_crc` |
+| **amdaemon.exe / game executable** (segatools only) | Stores the file paths; add / change / remove |
+| **Game settings** | "Open" opens the game's settings page (see below) |
+| **Remove game** | Deletes the entry after confirmation (including its cover cache and its settings file) |
 
-**图形设置页**：默认设置（开关，开启后禁用并忽略以下选项）、无边框模式、分辨率（1360x768 / 1920x1080 / 2560x1440 / 3840x2160）、渲染倍数（开 + 2x/4x/8x）、MSAA 抗锯齿（开 + 2x/4x/8x/16x）、各向异性过滤（开 + 2x/4x/8x/16x）。全部保存到 `config.ini` 的 `[graphics]` 节。图形设置仅作用于**游戏本体**（IDZ 映射进 segatools.ini `[gfx]`；ServerBox 一律忽略）。
+**Game settings page** ("Game settings" → "Open" on a game's row): the settings of that one game, on three tabs, Graphics, System and Input. Each game keeps them in a file of its own, `games\<id>.ini` next to `config.ini` (`<id>` is the game's id in `library.json`), with the sections and keys `config.ini` used for them before: `[graphics]`, `[coin]`, `[input]`, the game's keys of `[system]`, and `[wmmt3]` for a WMMT3 game. An Initial D game's tabs are described below; a WMMT3 game's in "Game families". A launch reads the launched game's file (a change still waiting to be saved is saved first).
 
-**网络设置页**：网卡下拉框（仅已连接的，含「刷新网卡」）→ 该网卡的 IPv4 网段下拉框（CIDR 去重）→ **模拟网络开关**（默认开）→ **主机 IP** 输入框 → **ServerBox IP** 输入框（仅模拟网络关闭时可编辑）。选网卡时自动预填：主机 IP = 首个 IPv4；ServerBox IP = 第二个 IPv4（没有则 +1）。所选网卡是 awl 虚拟网卡 `awl0` 时两个 IP 输入框锁定为房间值。全部保存到 `config.ini [network]`。
+**Moving the old settings**: earlier versions kept these settings in `config.ini`, shared by every game. At start, each game in the library without a file of its own gets a file with them, so it launches as it did before; then they are taken out of `config.ini` (if a file cannot be written, nothing is taken out and an error is shown). With an empty library they stay in `config.ini` until the first game is added. A game added later starts from the defaults.
 
-**VPN 设置页**：导入 `.ovpn` 配置、私钥密码、连接/断开、状态灯。见「VPN」一节。
+**Graphics tab**: default settings (a switch; when on, the options below are disabled and ignored), borderless mode, resolution (1360x768 / 1920x1080 / 2560x1440 / 3840x2160), render scale (on + 2x/4x/8x), MSAA (on + 2x/4x/8x/16x), anisotropic filtering (on + 2x/4x/8x/16x). Everything is saved to the `[graphics]` section of the game's settings file. The graphics settings apply to the **game only** (IDZ maps them into segatools.ini `[gfx]`; the ServerBox always ignores them).
 
-**系统设置页**：日志级别（info 默认 / error / warn / debug / trace）、Keychip（必填）、跳过读卡器初始化、**自动插卡**、**机位设置**（「主机」checkbox + SINGLE/A1/A2/B1/B2 下拉，用于 IDAC/IDZ 的 dipsw 与房间机位推导）。`[system]` 节键名：`loglevel` / `region`（仅旧配置回退用，UI 已移到游戏行）/ `keychip` / `skip_reader_init` / `auto_insert_card` / `seat` / `master`（开关写 1/0，留空未设置）。
+**Network page**: adapter drop-down (connected adapters only, with "Refresh adapters") → that adapter's IPv4 subnet drop-down (CIDRs without duplicates) → **simulate network switch** (on by default) → **host IP** field → **ServerBox IP** field (editable only with the network not simulated). Choosing an adapter pre-fills host IP = its first IPv4 address and ServerBox IP = its second (or the first + 1 when there is none). When the chosen adapter is the awl virtual adapter `awl0`, both IP fields are locked to the room's values. Everything is saved to `config.ini [network]`.
 
-**投币设置**（系统设置页内下拉展开卡片）：免费游玩、开始/续关/购买车卡/购买车辆币数（0~99），保存到 `[coin]` 节（`freeplay` / `start_coin` / `continue_coin` / `card_coin` / `car_coin`）。
+**VPN page**: import an `.ovpn` config, private key passphrase, connect/disconnect, status light. See the "VPN" section.
 
-**输入设置页**（右上角「扫描设备」「设备诊断」）：
+**System tab**: log level (info by default / error / warn / debug / trace), skip card reader initialisation, **auto-insert card**, **seat settings** (a "Host" checkbox + a SINGLE/A1/A2/B1/B2 drop-down, used for the IDAC/IDZ dipsw and to derive the room seat). The keys of the `[system]` section of the game's settings file: `loglevel` / `skip_reader_init` / `auto_insert_card` / `seat` / `master` (switches write 1/0, empty means unset). The keychip is the launcher's (Settings page); `config.ini [system]` keeps `keychip` and `region` (only as a fallback for old configs; the UI moved to the game row).
 
-- **基本设置**：test/service/投币键固定为 F1/F2/F3（展示）；输入模式（xinput / dinput）；输入信号限制（0~255 滑条，默认 128，可重置）；
-- **力反馈卡片**（恒写出配置）：开关（默认开）+ 恒力强度 / 阻尼强度 / 震动强度 / 震动时长（默认 100）+ 基础阻尼 / 中心死区（默认 20）滑条；
-- **xinput**：手柄设备（槽位 0~3）、双摇杆模式（默认关，影响 `singleStickSteering`）、线性方向（默认开）、左右摇杆死区（0~100%，默认 20%）、**12 个按键映射槽位**（升档/降档/方向四键/start/view/投币/插卡/油门/刹车），点「捕获」后 10 秒内按手柄键即记录按钮名（默认值 RB/LB/十字键/A/B/X/Y/RT/LT，重名红色高亮冲突）；
-- **dinput**：方向盘/油门踏板/排挡设备下拉（按设备路径区分同号多接口）；油门/刹车**轴捕获**（+ 反转轴值勾选）；排挡类型（序列 / H）；按钮捕获（升/降挡、方向四键、start/view/投币/插卡、1~6 挡、倒挡；十字键以伪码 ≥1000 记录、写 ini 时跳过）；重名冲突红色高亮。
+**Coin settings** (an expandable card on the System tab): free play and the coins for start / continue / buying a car card / buying a car (0~99), saved to the `[coin]` section (`freeplay` / `start_coin` / `continue_coin` / `card_coin` / `car_coin`).
 
-**设置页**：启动器版本（`APP_VERSION`）、语言（中文/English）、服务器地址（留空默认 `sdgt.arcadehub.xyz`，作用于 kitten redirect / mice naominet / segatools dns / initialD.ini）、房间昵称（最长 24 字，默认 `player1234`）、自动检查更新开关、立即检查按钮、**组件更新表格**（见「自动更新」一节）。
+**Input tab** ("Scan devices" and "Device diagnostics" at the top right):
 
-**底部状态栏**：服务器（按设置页地址探测 TCP 443/80，每 15 秒）/ VPN / 房间 / 更新 四个状态灯。
+- **Basics**: the test / service / coin keys are fixed to F1/F2/F3 (shown for information); input mode (xinput / dinput); input signal limit (a 0~255 slider, default 128, resettable).
+- **Force feedback card** (the config is always written): switch (on by default) + constant force / damper / rumble strength / rumble duration (default 100) + base damper / centre dead band (default 20) sliders.
+- **xinput**: controller (slot 0~3), dual-stick mode (off by default, affects `singleStickSteering`), linear steering (on by default), left and right stick dead zones (0~100%, default 20%), **12 button mapping slots** (shift up / shift down / the four directions / start / view / coin / card / accelerator / brake). After "Capture", the button pressed on the controller within 10 seconds is recorded by name (defaults RB/LB/D-pad/A/B/X/Y/RT/LT; duplicates are highlighted in red as conflicts).
+- **dinput**: wheel / pedal / shifter device drop-downs (told apart by device path when several interfaces share a name); throttle/brake **axis capture** (+ an "invert axis" checkbox); shifter type (sequential / H); button capture (shift up/down, the four directions, start / view / coin / card, gears 1~6, reverse; the D-pad is recorded as pseudo codes ≥1000, which are skipped when writing the ini); duplicates are highlighted in red as conflicts.
 
-## 4. 卡片选择（IDAS / Aime）
+**Settings page**: launcher version (`APP_VERSION`), language (中文 / English / 日本語, each in its own language), server address (empty means the default `sdgt.arcadehub.xyz`; used for kitten redirect / mice naominet / segatools dns / initialD.ini), keychip (required by the Initial D games and the rooms; it names this PC to the server and in the rooms, so it is the launcher's rather than a game's), room nickname (at most 24 characters, default `player1234`), automatic update check switch, a "Check now" button, and the **component update table** (see "Automatic updates").
 
-游戏行展开 →「卡片选择」进入（左侧滑入动画）。按加载器分两种模式：
+**Status bar at the bottom**: four status lights, server (probing TCP 443/80 of the address on the Settings page every 15 seconds) / VPN / room / update.
 
-**PNG 卡片（kitten / mice）**：
+## 4. Card selection
 
-- **卡片显示**：内置底图 + 游戏目录内卡图 **按底图尺寸居中叠加**（下移 4px，ID4 左移 5px），缩放至约 0.8 倍显示，多列自适应排布；合成分批预热并缓存，失败时卡片位直接显示原因，状态栏弹窗汇总。
-- **底图按游戏自动选用**（内嵌资源，**不再支持运行时替换**）：D4/D4kai→ID4 底图、D6→ID6 底图、D8→ID8 底图、其余→ID5 底图。
-- **卡片来源**：游戏目录（≤3 层子目录、最多 512 个目录）内含 **`INID` PNG 块**（2048 字节卡数据，micetools 卡格式）的 `.png`，通常位于 `disk0\mice\`。
-- **空白车卡**：列表首位常驻「空白车卡」块，点击即以随机名 `InidCrdXXXXX.png` 记为当前卡（无任何卡时自动选中一张空白卡）。
-- **单击卡片**：保存到该游戏的 `card` 字段（`library.json`；老的全局 `config.ini [card] cardfile` 仍作为回退）；当前卡强调色描边 +「当前使用」标注。
+Open "Card selection" from the expanded game row. The game determines the card format.
 
-**Aime 卡片（segatools：IDAC/IDZ）**：
+**Initial D PNG cards (kitten / mice)**
 
-- 卡片为 amdaemon 目录 **`DEVICE\`** 下的 `.txt` 文件（内容 = 20 位数字 access code）；扫描时自动把任意文件名重命名为 `<卡号>.txt`、去重、按修改时间新卡在前；
-- 列表首位「＋ 新建车卡」：随机生成 `5` 开头的 20 位卡号写盘并刷新；卡片上叠加显示四位分组的卡号。
+- **Card display**: the built-in base image + the card image from the game folder **centred over the base image at its size** (moved down 4 px, and left 5 px for ID4), shown scaled to about 0.8 and laid out in as many columns as fit. Compositing is warmed up in batches and cached; on failure the card slot shows the reason and a status bar dialog sums them up.
+- **The base image follows the game** (embedded resources, **no longer replaceable at run time**): D4/D4kai → the ID4 base, D6 → the ID6 base, D8 → the ID8 base, everything else → the ID5 base.
+- **Where cards come from**: `.png` files in the game folder (≤3 levels of subfolders, at most 512 folders) that contain an **`INID` PNG chunk** (2048 bytes of card data, the micetools card format), usually in `disk0\mice\`.
+- **Blank car card**: a "Blank car card" tile is always first in the list; clicking it makes a random `InidCrdXXXXX.png` name the current card (a blank card is selected automatically when there are no cards at all).
+- **Clicking a card**: stores it in the game's `card` field (`library.json`; the old global `config.ini [card] cardfile` is still the fallback). The current card has an accent-coloured outline and an "In use" label.
 
-页面顶部：返回按钮。
+**Aime cards (segatools, IDAC/IDZ)**
 
-## 5. 店内对战（房间虚拟局域网）
+- Cards are `.txt` files in the amdaemon folder's **`DEVICE\`** (content = a 20-digit access code). Scanning renames any file name to `<card number>.txt`, removes duplicates, and puts newer cards first by modification time.
+- "+ New car card" is first in the list: it writes a random 20-digit card number starting with `5` and refreshes. The card number is drawn over the card in groups of four.
 
-基于托管 **Anywherelan（awl）** 的 P2P 虚拟局域网 + 房间目录服务，实现店内 4 台机位联机。
+**Maximum Tune 3 / 3DX / 3DX+ cards (KittenTools)**
 
-**网络规划**（固定）：房间网段 `172.10.1.0/24`，虚拟网卡 `awl0`；房主游戏 IP `172.10.1.101`（机位 A1）、ServerBox IP `172.10.1.102`（仅 D4-D8 需要第二个 IP，IDAC/IDZ 房主单 IP）；成员机位按分配 IP 末字节：103=A2、104=B1、105=B2。房间内**强制模拟网络关闭**、网段/主机 IP/ServerBox IP 全部切换为房间值（游戏配置自动改写，退出后不影响原设置）。
+- The card list shows 207-byte `.bin` files in the game's `cards` folder or the location set by `[wmmt3] card_dir`. When available, the matching `<filename>.bin.png` supplies the preview.
+- Selecting a card saves its filename to the game's library entry and sets `[wmmt3] card_file` on launch. With no launcher selection, KittenTools uses its configured card filename or its default `card.bin`.
+- The new-card tile selects an unused filename. KittenTools writes the data when the player buys a new card in the game.
+- The game's System tab has an automatic insertion toggle that sets `[wmmt3] card_auto_insert`. Games configured with `card_reader_port` use their external reader.
+- KittenTools keeps three more files beside each card: `<filename>.bin.face.png` (what is printed on it), `<filename>.bin.stock.txt` (the file name of its blank card image) and `<filename>.bin.png` (the print on that image, the preview above). The launcher only reads the preview; a card copied elsewhere needs all four files.
+- The game's System tab also has a "Card printing" section: the folder of blank card images (`[wmmt3] print_template`; a card from the dispenser gets one of its images at random and keeps it), the print font file (`print_font_file`) and its name (`print_font_name`, filled in with the family name read from the font file whenever the file is chosen or typed). The folder and the font file are typed or chosen with "Browse…" (a folder dialog, or a file dialog for fonts). Each game has its own folder, such as one per game of 3, 3DX and 3DX+.
 
-**目录服务**（`https://dnet.arcadehub.xyz/roomapi`，可在 `config.ini [room] directory` 覆盖）：`POST /rooms`（建房，绑定 keychip）、`GET /rooms?game_id=`、`POST /rooms/{id}/join`（密码校验，返回房主 peer_id/IP 与本机座位 IP）、`GET /rooms/mine?keychip=`、`GET /rooms/{id}/members`、`POST /rooms/{id}/leave`、`DELETE /rooms/{id}?keychip=`（关房）、`POST /rooms/{id}/heartbeat`。房间容量 4/4。
+A back button sits at the top of the page.
 
-**建房间里**：进入页面要求已填 Keychip（否则拦截并跳系统设置页）；「创建…」选游戏（识别库产品列表）+ 房间名 + 密码（留空 = 公开房）。流程：校验 `awl-tray.exe` 版本（`-v` 必须含 `v0.19.0-mp2`）→ 首次生成 awl 身份（`data\awl\config_awl.json`，保留复用）→ 写 awl 配置（节点名 sasayaki、HTTP API `127.0.0.1:8639`、TUN 关闭/按需开、DNS 关）→ 注册防火墙规则（`Sasayaki Awl` 放行 + ICMP）→ 启动 `awl-tray.exe`（`AWL_DATA_DIR=data\awl`，等待本地 API 就绪 60s）→ 目录建房 → 给 `awl0` 加 ServerBox 单播 IP。离开房间/关程序时优雅退出 awl（API quit 5s 后 kill，Job Object 兜底）。
+## 5. In-store versus (room virtual LAN)
 
-**加入房间**：大厅公开列表（名称/游戏/人数，「加入」/「已满」）或「加入…」输 ID + 密码。流程：目录 join 取得本机座位 IP → 以该 IP 写 awl 配置并启动 → invite 房主（alias=host，写入房主游戏/ServerBox 双 IP + 域名）→ 30s 内等房主确认 → `update_settings` 校正 IP。
+A peer-to-peer virtual LAN run on a managed **Anywherelan (awl)** plus a room directory service, linking up to 4 seats as in a store.
 
-**成员对账**：
+**Network plan** (fixed): room subnet `172.10.1.0/24`, virtual adapter `awl0`; the host's game IP is `172.10.1.101` (seat A1) and its ServerBox IP `172.10.1.102` (only D4-D8 need the second IP; IDAC/IDZ hosts use a single IP); members' seats follow the last byte of the IP they are given: 103=A2, 104=B1, 105=B2. Inside a room the network is **forced to not simulated**, and the subnet / host IP / ServerBox IP all switch to the room's values (the game configs are rewritten automatically; the original settings are not affected after leaving).
 
-- **房主**每秒 tick（不在房间页时 15s）：拉目录成员表（≤60s 或发现有未知已连接 peer 时刷新）；对未 invite 的成员按座位 IP invite（成员侧也会反向 invite 房主形成全互联 mesh）；掉线成员**从未建连等 90s、曾建连等 10s** 后代为 leave 踢出；每 300s 心跳续房；把成员表发布给同步服务。
-- **成员**每秒 tick（不在房间页时 15s）：收到房主 close 帧即自动退房（任意页面生效）；房间页内另以 2s 轮询 awl peers 监听房主存活（10s 判死自动退房并提示）；从同步表增量接收成员表（发现被移出即自动退房）；对表中其他成员 invite（mesh）；游玩状态变化即上报（30s keepalive）。
+**Directory service** (`https://dnet.arcadehub.xyz/roomapi`, overridable with `config.ini [room] directory`): `POST /rooms` (create a room, bound to the keychip), `GET /rooms?game_id=`, `POST /rooms/{id}/join` (checks the password, returns the host's peer_id/IP and this machine's seat IP), `GET /rooms/mine?keychip=`, `GET /rooms/{id}/members`, `POST /rooms/{id}/leave`, `DELETE /rooms/{id}?keychip=` (close the room), `POST /rooms/{id}/heartbeat`. A room holds 4.
 
-**成员状态同步**：房主在 `172.10.1.101:27510` 监听 TCP，JSON 行协议——上行 `hello`/`status`（peer_id、昵称、playing），下行带版本号的成员表（`SyncTable`：成员 peer/IP/昵称/游玩状态 + 房主昵称/状态）与 `{"type":"close"}`；状态 75s 无更新视为空闲，断线 1s 自动重连。
+**Creating a room**: entering the page requires a keychip (otherwise it is blocked and jumps to the Settings page). "Create…" picks a game (the database's product list) + room name + password (empty = a public room). Flow: check the `awl-tray.exe` version (`-v` must contain `v0.19.0-mp2`) → create the awl identity the first time (`data\awl\config_awl.json`, kept and reused) → write the awl config (node name sasayaki, HTTP API `127.0.0.1:8639`, TUN off / on as needed, DNS off) → register firewall rules (`Sasayaki Awl` allow + ICMP) → start `awl-tray.exe` (`AWL_DATA_DIR=data\awl`, waiting up to 60 s for the local API) → create the room in the directory → add the ServerBox unicast IP to `awl0`. When leaving the room or closing the program, awl is shut down gracefully (API quit, killed after 5 s, with a Job Object as the last resort).
 
-**房间页（进行中）**：房间 ID / 密码（可复制）/ 游戏 / 本机游戏地址 / ServerBox 地址（D4-D8 显示）；成员表（机位/成员/地址/状态灯/游玩中/延迟/直连或中继）；「启动游戏」「启动 ServerBox」（仅房主且已配置）「关闭房间 / 离开房间」。**关闭房间**会先通知成员（close 帧），再以 keychip 调目录 DELETE 清除房间（「房间没消失」问题由此修复），最后移除全部 awl peers 并退出 awl。
+**Joining a room**: the lobby's public list (name / game / players, "Join" / "Full") or "Join…" with an ID + password. Flow: join in the directory to get this machine's seat IP → write the awl config with that IP and start it → invite the host (alias=host, with the host's game / ServerBox IPs + domain) → wait up to 30 s for the host to accept → correct the IP with `update_settings`.
 
-**断线回归**：launcher 被杀时，其预先 fork 的 `--room-watchdog` 子进程等父进程退出后自动关房（重试 3 次）；正常退出房间页后再进入时自动「回归房间」——有 keychip 先查 `rooms/mine` 恢复房主身份，否则用记忆的 `last_room` 自动加入（密码以 DPAPI 加密存在 `config.ini [room]`）。
+**Member reconciliation**:
+
+- The **host** ticks every second (every 15 s when not on the room page): fetches the directory's member list (at most every 60 s, or at once when an unknown connected peer appears); invites members not invited yet at their seat IP (members also invite the host back, forming a full mesh); a member who dropped out is removed with leave after **90 s if never connected, or 10 s if once connected**; renews the room with a heartbeat every 300 s; publishes the member list to the sync service.
+- A **member** ticks every second (every 15 s when not on the room page): leaves the room automatically when it receives the host's close frame (on any page); on the room page it also polls the awl peers every 2 s to watch the host (declared dead after 10 s, leaving automatically with a notice); receives the member list incrementally from the sync table (leaving automatically when it finds itself removed); invites the other members in the list (mesh); reports changes of its playing state at once (30 s keep-alive).
+
+**Member state sync**: the host listens on TCP `172.10.1.101:27510` with a JSON-lines protocol: upstream `hello` / `status` (peer_id, nickname, playing); downstream a versioned member list (`SyncTable`: each member's peer / IP / nickname / playing state + the host's nickname / state) and `{"type":"close"}`. A state without updates for 75 s counts as idle; a dropped connection reconnects after 1 s.
+
+**Room page (in a room)**: room ID / password (copyable) / game / this machine's game address / ServerBox address (shown for D4-D8); the member table (seat / member / address / status light / playing / latency / direct or relayed); "Launch game", "Launch ServerBox" (host only, when configured), "Close room / Leave room". **Closing the room** first notifies the members (close frame), then deletes the room in the directory with the keychip (this fixed "the room does not disappear"), and finally removes every awl peer and quits awl.
+
+**Recovering after a disconnect**: if the launcher is killed, the `--room-watchdog` child process it forked in advance waits for the parent to exit and closes the room (3 retries). After leaving the room page normally, entering it again "returns to the room" automatically: with a keychip it first asks `rooms/mine` to restore the host role, otherwise it joins the remembered `last_room` automatically (the password is stored DPAPI-encrypted in `config.ini [room]`).
 
 ## 6. VPN
 
-「VPN 设置」页管理 **OpenVPN** 连接（远程联机用，与房间无关）：
+The "VPN" page manages an **OpenVPN** connection (for remote play, unrelated to rooms):
 
-- `openvpn.exe` 放 `tools\openvpn\`（或 `config.ini [vpn] openvpn=` 指定绝对路径），`wintun.dll` 同目录时优先 wintun 驱动、失败自动回退 tap-windows6（无 wintun 则反之，驱动类错误才重试）；
-- 导入 `.ovpn`（路径与私钥密码存 `[vpn]` 节，密码 DPAPI 加密）；连接时写临时密码文件（`--askpass`/`--auth-user-pass`），配置缺 keepalive 指令时自动补 `--ping 10 --ping-restart 60`；25s 内日志出现 `initialization sequence completed` 视为成功，失败/超时从日志提取错误行提示（wintun 类错误附「确认 wintun.dll 已放同目录」）；
-- **启动时自动连接**已配置的 VPN；断线自动重连 3 次（稳定连接 ≥300s 后重置计数），用尽后置失败并提示手动重连；2s 轮询守护线程监视进程存活，Job Object 保证进程树一并退出。
+- `openvpn.exe` goes in `tools\openvpn\` (or an absolute path in `config.ini [vpn] openvpn=`). With `wintun.dll` in the same folder the wintun driver is preferred, automatically falling back to tap-windows6 on failure (and the other way round without wintun; only driver errors are retried).
+- Import an `.ovpn` (its path and the private key passphrase are stored in the `[vpn]` section, the passphrase DPAPI-encrypted). Connecting writes a temporary password file (`--askpass` / `--auth-user-pass`), and adds `--ping 10 --ping-restart 60` when the config has no keepalive directive. Seeing `initialization sequence completed` in the log within 25 s counts as success; on failure or timeout the error lines are taken from the log and shown (wintun-type errors add "make sure wintun.dll is in the same folder").
+- A configured VPN **connects automatically at start-up**. A dropped connection is retried 3 times (the count resets after a connection stable for ≥300 s); after that it is marked failed with a prompt to reconnect by hand. A guard thread polling every 2 s watches the process, and a Job Object makes sure the process tree exits with the launcher.
 
-## 7. 组件与启动器自动更新
+## 7. Automatic updates of components and the launcher
 
-启动器内置 7 个更新目标，直接从各组件仓库的最新 Release 取更新，无需维护 manifest：
+The launcher has 7 built-in update targets and takes updates straight from the latest Release of each component's repository, with no manifest to maintain:
 
-| 目标 | 资产匹配（忽略大小写） | 更新源 |
+| Target | Asset match (case-insensitive) | Source |
 | --- | --- | --- |
-| **Sasayaki Launcher**（自升级） | `launcher*.zip` | GitCode `project-sasayaki/launcher` |
+| **Sasayaki Launcher** (self-update) | `launcher*.zip` | GitCode `project-sasayaki/launcher` |
 | kittentools | `kitten*.zip` | GitHub / GitCode `project-sasayaki/kittentools` |
 | micetools | `mice*.zip` | GitHub / GitCode `project-sasayaki/mice-inid-release` |
 | segatools | `segatools*.zip` | GitHub / GitCode `project-sasayaki/segatools-inid-release` |
-| Ultimate-ASI-Loader | `ultimate-asi-loader*nopdb*`（排除 x64） | GitHub `ThirteenAG/Ultimate-ASI-Loader` / GitCode 镜像 |
+| Ultimate-ASI-Loader | `ultimate-asi-loader*nopdb*` (excluding x64) | GitHub `ThirteenAG/Ultimate-ASI-Loader` / GitCode mirror |
 | shaderfix-idas | `shaderfix.zip` | Gitea `gitea.tendokyu.moe/puniru/shaderfix-idas` |
 | awl | `awl*.zip` | GitHub / GitCode `project-sasayaki/awl` |
 
-- **检查**：启动时立即检查一次，之后每 1 小时（「自动检查更新」开关控制）；点「立即检查」破缓存强制查。双源仓库按界面语言择一（中文→GitCode、英文→GitHub）。24 小时缓存 `data\update_cache.json`（带 `schema` 版本号，解析规则升级自动失效）。
-- **取「最新」Release**：优先单对象端点 `/releases/latest`；数组端点按「`release_status == "latest"` → `created_at` 最晚 → 数组末位」重排取首（GitCode 按发布时间升序返回，直接取首个会拿到最旧的）；最新一条没有匹配资产时按同序回退更早一条。填 `.../releases/tag/v1.4.2` 语义由内置源固定提供，代码同样支持锁定 tag。
-- **版本**：一律取 Release tag 去 `v`（如 `1.4.2`），按点分段数值比较（`1.10` > `1.9`）；本地基线为 `data\settings.json` 的 `last_<组件>_version`（安装成功后回写），**启动器的基线是编译期 `APP_VERSION` 常量**。
-- **下载与校验**：WinHTTP 流式落盘（`.part` 临时文件）+ 实时进度（下载/解压/安装三阶段，可取消）；GitHub 资产带 `digest`（`sha256:...`）时下载后自动校验。
-- **安装（tools 组件）**：解压到 `tools\.__update_<组件>\` → 剥掉单层顶层目录 → 旧目录改名备份 → 换入 → 删备份；失败自动回滚。安装后重新扫描加载器路径。
-- **安装（启动器自升级）**：解压后**合并覆盖**启动器目录（顶层跳过 `launcher.exe` / `data\` / `.old`，用户数据不动）→ 旧 exe 改名挪入临时目录 → 新 exe 原子换入 → 以 `--self-restart <旧pid>` 拉起新版并退出（新进程等旧进程退出，`AllowSetForegroundWindow` 保持前台）。启动时清理升级残留（`launcher.exe.old`、`.__launcher_backup`、`.__update_launcher`）。
-- **约束**：游戏运行中禁止更新；启动器有更新时必须先更新启动器才能更新其他组件（「全部更新」同样遵守）；发现新版本时状态栏置「有更新」并弹「组件有可用更新」对话框（可前往设置页）。
+- **Checking**: once at start-up, then every hour (controlled by the "Check for updates automatically" switch); "Check now" bypasses the cache. For targets with two sources, the interface language picks one (Chinese → GitCode, any other language → GitHub). Results are cached for 24 hours in `data\update_cache.json` (with a `schema` version, so a change of the parsing rules invalidates it automatically).
+- **Picking the "latest" Release**: the single-object endpoint `/releases/latest` is preferred; an array endpoint is reordered by "`release_status == "latest"` → latest `created_at` → last in the array" and the first is taken (GitCode returns releases oldest first, so taking the first one directly would give the oldest). When the latest one has no matching asset, the next older one in the same order is used. Pinning `.../releases/tag/v1.4.2` is provided by the built-in sources; the code supports pinning a tag as well.
+- **Versions**: always the Release tag without `v` (e.g. `1.4.2`), compared numerically part by part (`1.10` > `1.9`). The local baseline is `last_<component>_version` in `data\settings.json` (written back after a successful install); **the launcher's baseline is the compile-time `APP_VERSION` constant**.
+- **Download and verification**: WinHTTP streams to disk (a `.part` temporary file) with live progress (download / extract / install, cancellable). When a GitHub asset carries a `digest` (`sha256:...`), it is verified after the download.
+- **Installing (tools components)**: extract to `tools\.__update_<component>\` → strip a single top-level folder → rename the old folder as a backup → move the new one in → delete the backup; rolled back automatically on failure. The loader paths are scanned again after installing.
+- **Installing (launcher self-update)**: after extracting, the files are **merged over** the launcher folder (skipping `launcher.exe` / `data\` / `.old` at the top level, so user data is untouched) → the old exe is renamed and moved into a temporary folder → the new exe is swapped in atomically → the new version is started with `--self-restart <old pid>` and the old one exits (the new process waits for the old one to exit; `AllowSetForegroundWindow` keeps it in the foreground). Leftovers of an update (`launcher.exe.old`, `.__launcher_backup`, `.__update_launcher`) are cleaned up at start-up.
+- **Rules**: no updates while a game is running; when the launcher itself has an update, it must be updated before any other component ("Update all" follows this too). When a new version is found, the status bar shows "Update available" and a "Component updates available" dialog opens (with a way to the Settings page).
 
-## 数据存储（绿色免安装）
+## Game families
 
-exe 同目录 `data\`：
+The games are grouped into families that are launched the same way (`src/games/`):
 
-- `library.json`：游戏库。每条记录含 `path` / `name` / `crc` / `version` / `arch` / `loader`（kitten|mice|segatools）/ `platform` / `image`（用户封面文件）/ `cover`（内置封面名）/ `serverbox` / `amdaemon` / `game_exe` / `game_id` / `gfx_patch` / `test_mode` / **`card`（每游戏独立选卡）** / **`region`（每游戏地区）** / `play_count` / `last_played` / `added_at`（旧档缺字段自动兼容）；
-- `settings.json`：加载器路径（kitten/mice/mice64/segatools）、`auto_check_updates`、各组件 `last_*_version`；
-- `images\`：封面缓存；`awl\`：awl 身份与配置（`config_awl.json`）；`update_cache.json`：更新缓存。
+| Family | Games | Loader | Card | ServerBox |
+| --- | --- | --- | --- | --- |
+| `IdasLindbergh` | Initial D Arcade Stage 4 / 5 | kitten | INID PNG, picodaemon reader | yes |
+| `IdasRingEdge` | Initial D Arcade Stage 6 / 7 / 8 | mice | INID PNG, picodaemon reader | yes |
+| `Idac` | Initial D The Arcade | segatools (idachook) | Aime | no |
+| `Idz` | Initial D Arcade Stage Zero | segatools (idzhook) | Aime | no |
+| `Wmmt3` | Wangan Midnight Maximum Tune 3 / 3DX / 3DX+ | kitten | (in kitten's config) | no |
 
-exe 同目录 `config.ini`（`ini.rs` 只改键保留其余内容；密码类键 DPAPI 加密）：`[network]`（adapter / ip / simulate / server / host_ip / serverbox_ip）、`[system]`（loglevel / region / keychip / skip_reader_init / auto_insert_card / seat / master）、`[graphics]`、`[coin]`、`[input]`（类型/比率/设备/按键/力反馈/xinput 槽位等约 40 键）、`[card]`（全局卡，作为每游戏选卡的回退）、`[vpn]`（config / passphrase / openvpn）、`[room]`（directory / awl / last_room / last_password / nickname）、`[ui]`（lang）。删除即重置。
+`games::family_of` picks the family from the record's loader and game id (kitten games with the game id `WM3` / `W3X` / `W3P` are `Wmmt3`). Each family implements `GameFamily`:
 
-## 识别库（games_db.json）
+- `ui_features`: the game row controls and selected-card extension; `card_kind`: the card page format and artwork (unknown IDs retain the existing ID5 fallback);
+- `check`: the settings this family needs (the Initial D families all need the region, keychip and network);
+- `prepare`: write the configs and copy the tools into the game folder;
+- `start`: start the helpers (card reader, amdaemon) and the game, and say what to end when it exits;
+- `launch_serverbox`: start the ServerBox, for the families that have one.
 
-**人工维护**的嵌套 JSON（构建时内嵌）。顶层结构：
+`games::launch_game` runs these in order (sections 1.1–1.7 describe what each family does), and adds the ServerBox's static IP between `prepare` and `start` for families with a ServerBox. The interface gathers a `LaunchInput` from the settings in effect and shows the result; a `LaunchProblem` names the page where the user can fix a missing setting. The game row and card page take their family-specific choices from these methods. The ServerBox row remains conditional on the matched build having a ServerBox CRC.
+
+**Wangan Midnight Maximum Tune 3 / 3DX / 3DX+** (`games/wmmt3/`): the launch copies kitten's files next to the game's `main`, writes the launcher's settings into `kitten\config.ini`, and starts `kitten.exe -b main`. KittenTools keeps every setting of these games in its `[wmmt3]` section (apart from `[sysconf] log_level`). The launcher offers them on the game's settings page: the Graphics tab (screen), the System tab (log level, automatic card insertion, card printing, free play, linked play, sound, load times, dongle) and the Input tab (the controls and the coin, card, test and service switches on the device of the input mode in use, the keyboard keys, force feedback); a setting is shown only while it has an effect (the window size without the cabinet's resolution, the second dongle on 3DX+, …), and its value is kept while hidden; `games/wmmt3/settings.rs` lists them with KittenTools' names and defaults, and must follow KittenTools' `wmmt3Config.def` when that changes. The values set there are kept in the `[wmmt3]` section of the game's own settings file, and written into the game's `kitten\config.ini` at launch together with `[sysconf] log_level` (System tab); a setting never changed in the launcher is not written, and the rest of the file stays as it is, to be edited by hand. These games need no keychip, region or subnet, and use the built-in card reader in KittenTools by default. The test button is a key. They are not offered in rooms: their linked play needs the cabinets in one /24 network that carries multicast, which the rooms do not provide. Their covers are `logo_wm3`, `logo_wm3dx` and `logo_wm3dxplus` (each with a `_big` version), shared by the regional versions.
+
+**Adding a game family**: write `src/games/<family>.rs` implementing `GameFamily`, and return it from `family_of`. Shared steps (card reader, graphics patch, ServerBox, `initialD.ini`) are in their own modules; the loader modules in `src/loaders/` only render config files.
+
+## Interface languages
+
+The texts are compiled into the binary from `locales/<locale>.yml` by rust-i18n (`rust_i18n::i18n!` in `main.rs`; `build.rs` makes an edited locale file rebuild the crate). Code refers to a text by key: `t!("page_games.launch")`, or with values `t!("common.failed_to_copy", src = path.display(), error = e)`, whose `%{src}` / `%{error}` placeholders the locale files fill in. `en.yml` is the base; a key missing from another locale would show its English text.
+
+- Keys are grouped by where they are used (`page_games`, `launch`, `update`, …); texts several places share are in `common`, the navigation entries in `nav`, and the errors of the HTTP client in `http`.
+- Tables whose entries carry a label (the input bindings, the log levels, the seats) hold the label's key and translate it where it is shown.
+- `config.ini [ui] lang` stores `zh-CN` / `en-US` / `ja-JP`. With no (or an unknown) value the Windows locale decides: `zh-*` → Chinese, `ja-*` → Japanese, anything else → English.
+
+`cargo test` checks the catalog: every locale has exactly the keys of `en.yml` with the same placeholders, every `t!` call in the sources names an existing key and passes exactly the placeholders of its text, and every text is used somewhere.
+
+**Adding or changing a text**: add the key to all three locale files (in the same section), then use it. **Adding a language**: add `locales/<locale>.yml`, a `Lang` variant with its locale, native name and `config.ini` value in `i18n.rs`, and its case in `Lang::from_locale_name`.
+
+## Data storage (portable, no installation)
+
+`data\` next to the exe:
+
+- `library.json`: the game library. Each record has `path` / `name` / `crc` / `version` / `arch` / `loader` (kitten|mice|segatools) / `platform` / `image` (the user's cover file) / `cover` (built-in cover name) / `serverbox` / `amdaemon` / `game_exe` / `game_id` / `gfx_patch` / `test_mode` / **`card` (card chosen per game)** / **`region` (region per game)** / `play_count` / `last_played` / `added_at` (older files with missing fields are read compatibly).
+- `settings.json`: loader paths (kitten/mice/mice64/segatools), `auto_check_updates`, and each component's `last_*_version`.
+- `images\`: cover cache; `awl\`: awl identity and config (`config_awl.json`); `update_cache.json`: update cache.
+
+`config.ini` next to the exe (`ini.rs` changes single keys and keeps the rest; password-type keys are DPAPI-encrypted): `[network]` (adapter / ip / simulate / server / host_ip / serverbox_ip), `[system]` (keychip / region), `[card]` (the global card, the fallback for the per-game card), `[vpn]` (config / passphrase / openvpn), `[room]` (directory / awl / last_room / last_password / nickname), `[ui]` (lang). Delete it to reset.
+
+`games\<id>.ini` next to it, one per game (see "Game settings page"): `[system]` (loglevel / skip_reader_init / auto_insert_card / seat / master), `[graphics]`, `[coin]`, `[input]` (type / ratio / devices / buttons / force feedback / xinput slot, about 40 keys), `[wmmt3]` (WMMT3 games: their settings under KittenTools' names). Delete one to reset that game.
+
+## Game database (games_db.json)
+
+A **hand-maintained** nested JSON file (embedded at build time). Top-level structure:
 
 ```jsonc
 {
@@ -347,15 +401,15 @@ exe 同目录 `config.ini`（`ini.rs` 只改键保留其余内容；密码类键
       "name": "InitialD Arcade Stage 8 JPN",
       "game_id": "SBZZ",
       "platform": "RingEdge",
-      "loader": "mice",                          // kitten = D4/D5，mice = D6-D8，segatools = IDAC/IDZ
-      "image": "logo_D8.png",                    // 内置封面名（必须登记在 src/assets/ 内）
+      "loader": "mice",                          // kitten = D4/D5, mice = D6-D8, segatools = IDAC/IDZ
+      "image": "logo_D8.png",                    // built-in cover name (must exist in src/assets/)
       "support_game": [
         { "crc": "0x1fd6136a", "version": "2.01", "sb_crc": "0x8667432a" },
-        { "version": "3.41.00" }                 // segatools 条目可无 crc（仅 ICF1 识别路径命中）
+        { "version": "3.41.00" }                 // segatools entries may have no crc (matched only through ICF1)
       ]
     }
   ],
-  "card_reader": {                               // picodaemon，CRC 校验用
+  "card_reader": {                               // picodaemon, for the CRC check
     "name": "picodaemon", "platform": "RingEdge", "loader": "mice",
     "support_game": [
       { "crc": "0x037ff93c", "version": "2014" },
@@ -365,58 +419,69 @@ exe 同目录 `config.ini`（`ini.rs` 只改键保留其余内容；密码类键
 }
 ```
 
-- 现有产品：D4/D4kai/D5/D5EXP（kitten）、D6AA JPN/EXP/CHN、D7AAX JPN/CHN、D8 JPN/EXP（mice）、**IDAC Season 1~6（SDGT，仅版本号条目）**、**IDZ / IDZ Ver.2（SDDF）、IDZ CHN（SDER）**（segatools）。
-- 添加游戏按「文件类型 → loader + CRC」命中某产品的某构建；`sb_crc` 为该构建对应的 ServerBox CRC（缺失 / null / 空串均视为无 ServerBox，不显示 ServerBox 行）。ICF1 路径按 `game_id + 版本号（可 2/3 段，等值比较）` 命中。
-- `card_reader` 用于读卡器 CRC 校验（游戏目录内 picodaemon 自动补齐时校验现有文件）。
+- Products: D4/D4kai/D5/D5EXP (kitten), D6AA JPN/EXP/CHN, D7AAX JPN/CHN, D8 JPN/EXP (mice), **IDAC Season 1~6 (SDGT, version-only entries)**, **IDZ / IDZ Ver.2 (SDDF), IDZ CHN (SDER)** (segatools), **WMMT3 JPN/EXP (WM3), 3DX JPN/EXP (W3X), 3DX+ JPN/EXP/CHN (W3P)** (kitten, System N2; versions are the builds' Namco revision letters, e.g. `B02`). A product with `"in_store_battles": false` is not offered in rooms. `release` is the date the game came out in Japan (`YYYY-MM-DD`; its export versions share it), from Japanese Wikipedia (頭文字D ARCADE STAGE, 稼働開始; 湾岸ミッドナイト MAXIMUM TUNEシリーズ, 発売日); the Games page sorts by it.
+- Adding a game matches a build of a product by "file type → loader + CRC". `sb_crc` is the CRC of that build's ServerBox (missing / null / an empty string all mean no ServerBox, and the ServerBox row is not shown). The ICF1 path matches `game_id + version (2 or 3 parts, compared for equality)`.
+- `card_reader` is used for the card reader's CRC check (when picodaemon is provisioned into a game folder, an existing file is checked against it).
 
-### CRC 算法（与 C 源码逐字节一致）
+### CRC algorithms (byte for byte the same as the C sources)
 
-| 加载器 | 算法 | 范围 |
+| Loader | Algorithm | Range |
 | --- | --- | --- |
-| mice | 标准 CRC-32（crc32fast） | PE `.text` 段原始字节 |
-| kitten | 标准 CRC-32（JAMCRC 异或等价） | ELF 映像 `base+10` 起 0x4000 字节；PT_LOAD 段之间的空洞按 0 填充参与哈希 |
+| mice | Standard CRC-32 (crc32fast) | The raw bytes of the PE `.text` section |
+| kitten | Standard CRC-32 (equivalent to JAMCRC with an XOR) | 0x4000 bytes of the ELF image from `base+10`; gaps between PT_LOAD segments are hashed as zeros |
 
-## 构建
+## Building
 
 ```bash
-cargo build --release   # 产物 target/release/launcher.exe + 引导 dll（框架依赖，不捆绑运行时）
-cargo test              # 200+ 单元测试（CRC 复刻 / 识别库查表 / ICF 解密解析 / 各配置渲染映射 /
-                        # 读卡器与依赖部署 / 图形补丁 / ini 持久化 / 更新解析与安装 / 房间同步协议等）
+cargo build --release   # produces target/release/launcher.exe + the bootstrap dll (framework-dependent, no bundled runtime)
+cargo test              # 200+ unit tests (CRC reproduction / database lookup / ICF decryption and parsing /
+                        # every config rendering mapping / card reader and dependency deployment / graphics patch /
+                        # ini persistence / update parsing and installation / room sync protocol, …)
 ```
 
-- `build.rs`：框架依赖模式（`windows_reactor_setup::as_framework_dependent()`），并从 `src/main.rs` 的 `APP_VERSION` 写入 exe 图标与 `VERSIONINFO`（数值与字符串两份都对齐）。
-- 发布约定（配合自动更新）：版本号写 Release tag（去 `v` 后即版本）；启动器资产命名 `launcher*.zip`，**包内勿带 `data\`**（自升级合并覆盖会跳过它，但保持包干净）；tools 组件资产 `kitten.zip` / `mice.zip` / `segatools.zip` / `shaderfix.zip` 等。
-- 依赖来源：`windows-reactor` / `windows-reactor-setup`（[microsoft/windows-rs](https://github.com/microsoft/windows-rs) 官方 git 依赖）。
+- `build.rs`: framework-dependent mode (`windows_reactor_setup::as_framework_dependent()`), and writes the exe icon and `VERSIONINFO` from `APP_VERSION` in `src/main.rs` (both the numeric and the string copies agree).
+- Release conventions (for the automatic updates): the version is the Release tag (the version is the tag without `v`); the launcher asset is named `launcher*.zip`, and **must not contain `data\`** (the self-update merge skips it, but keep the package clean); tools component assets are `kitten.zip` / `mice.zip` / `segatools.zip` / `shaderfix.zip`, etc.
+- Dependency source: `windows-reactor` / `windows-reactor-setup` (official git dependencies of [microsoft/windows-rs](https://github.com/microsoft/windows-rs)).
 
-## 目录结构
+## Folder structure
 
 ```
 ├── src/
-│   ├── main.rs           # 入口：UAC 提权重拉、--self-restart / --room-watchdog 子模式、升级残留清理、运行时引导
-│   ├── reactor_app.rs    # WinUI 3 主组件（导航/顶栏/状态栏/消息分发）+ reactor_app/ 分页面板与弹窗
-│   ├── launch.rs         # 加载器扫描、部署编排、读卡器/ServerBox 拉起、netsh 静态 IP、图形补丁部署
-│   ├── kitten.rs         # kitten 部署：config.ini 渲染 + 工具复制（含单元测试）
-│   ├── mice.rs           # mice 部署：config.ini / idas.ini 渲染（Game/ServerBox 双目标）+ CIDR 推导（含单元测试）
-│   ├── segatools.rs      # segatools 部署：segatools.ini 渲染（IDAC/IDZ 双形态）、amdaemon/游戏命令行、spike
-│   ├── initiald.rs       # initialD.ini 字节级私服改写（D4-D7，含单元测试）
-│   ├── icf.rs            # ICF1 解密（AES-128-CBC）+ appid/版本解析（含单元测试）
-│   ├── db.rs             # 识别库查表（CRC 索引 + game_id/version 索引，含单元测试）
-│   ├── detect.rs         # PE/ELF 检测 + CRC 复刻 + picodaemon 探测（含单元测试）
-│   ├── cards.rs          # INID PNG 卡扫描 + Aime 卡新建/扫描（含单元测试）
-│   ├── storage.rs        # 数据模型与 JSON 持久化 + config.ini 各节读写（含单元测试）
-│   ├── ini.rs            # 通用 INI 单键读写（保留注释，含单元测试）
-│   ├── netinfo.rs        # 网卡与 IPv4 网段枚举（GetAdaptersAddresses，含单元测试）
-│   ├── rawinput.rs       # HID 设备枚举与按键/轴/XInput 捕获
-│   ├── render_util.rs    # 配置渲染公共件（Sections/复制工具文件/死区换算，含单元测试）
-│   ├── update.rs         # 组件与启动器自升级（Release 解析/下载/校验/安装，含单元测试）
-│   ├── awl.rs            # Anywherelan 生命周期（建房/加入/invite/IP 规划/防火墙，含单元测试）
-│   ├── roomdir.rs        # 房间目录 REST 客户端（含单元测试）
-│   ├── room_sync.rs      # 房间成员状态同步 TCP 协议（host/member 双端，含单元测试）
-│   ├── vpn.rs            # OpenVPN 托管（驱动回退/日志诊断/Job Object，含单元测试）
-│   ├── server.rs         # 服务器探测线程
-│   ├── i18n.rs           # 中英双语（t!/tf! 宏，含单元测试）
-│   ├── filedialog.rs     # 原生文件选择对话框
-│   ├── win_util.rs       # 宽字符/CREATE_NO_WINDOW/DPAPI 等小工具
-│   └── assets/           # 内嵌资源：卡片底图（id4/id5/id6/id8/aime）、各游戏封面 logo、launcher.ico
-└── games_db.json         # 识别库（人工维护，构建时嵌入）
+│   ├── main.rs           # Entry point: UAC relaunch, --self-restart / --room-watchdog sub-modes, update leftover clean-up, runtime bootstrap
+│   ├── reactor_app.rs    # WinUI 3 main component (navigation / top bar / status bar / message dispatch) + the pages and dialogs under reactor_app/
+│   ├── games/            # The game families and how each is launched (see "Game families")
+│   │   ├── mod.rs        # GameFamily trait, LaunchInput, launch_game / launch_serverbox, family_of
+│   │   ├── idas_lindbergh.rs, idas_ringedge.rs, idac.rs, idz.rs, wmmt3/   # one family each (wmmt3/settings.rs: its settings table)
+│   │   ├── idas.rs, alls.rs                # steps the IDAS / segatools families share
+│   │   ├── card_reader.rs  # picodaemon card reader: provisioning, idas.ini, start (with unit tests)
+│   │   ├── gfx_patch.rs    # winmm.dll + shaderfix graphics patch (with unit tests)
+│   │   ├── serverbox.rs    # ServerBox folder / record / graphics patch, netsh static IP (with unit tests)
+│   │   └── initiald.rs     # Byte-level private-server rewrite of initialD.ini (D4-D7, with unit tests)
+│   ├── loaders/          # The loaders and their config files
+│   │   ├── mod.rs        # Loader scan and resolution (settings path or next to the launcher)
+│   │   ├── kitten.rs     # kitten: config.ini rendering + tool copying (with unit tests)
+│   │   ├── mice.rs       # mice: config.ini / idas.ini rendering (game and ServerBox targets) + CIDR derivation (with unit tests)
+│   │   ├── segatools.rs  # segatools: segatools.ini rendering (IDAC and IDZ forms), amdaemon / game command lines, spike
+│   │   └── render_util.rs  # Shared config rendering helpers (Sections / tool file copying / dead zone conversion, with unit tests)
+│   ├── file_util.rs      # File copying helpers for deployment (with unit tests)
+│   ├── icf.rs            # ICF1 decryption (AES-128-CBC) + appid / version parsing (with unit tests)
+│   ├── db.rs             # Game database lookup (CRC index + game_id/version index, with unit tests)
+│   ├── detect.rs         # PE/ELF detection + CRC reproduction + picodaemon probing (with unit tests)
+│   ├── cards.rs          # INID PNG card scanning + Aime card creation / scanning (with unit tests)
+│   ├── storage.rs        # Data model and JSON persistence + reading/writing config.ini and each game's games\<id>.ini (with unit tests)
+│   ├── ini.rs            # Generic single-key INI read/write that keeps comments (with unit tests)
+│   ├── netinfo.rs        # Adapter and IPv4 subnet enumeration (GetAdaptersAddresses, with unit tests)
+│   ├── rawinput.rs       # HID device enumeration and button / axis / XInput capture
+│   ├── update.rs         # Component and launcher self-update (Release parsing / download / verification / installation, with unit tests)
+│   ├── awl.rs            # Anywherelan lifetime (create / join / invite / IP plan / firewall, with unit tests)
+│   ├── roomdir.rs        # Room directory REST client (with unit tests)
+│   ├── room_sync.rs      # Room member state sync TCP protocol (host and member sides, with unit tests)
+│   ├── vpn.rs            # OpenVPN management (driver fallback / log diagnosis / Job Object, with unit tests)
+│   ├── server.rs         # Server probing thread
+│   ├── i18n.rs           # Interface languages: the choice, config.ini value, system default; catalog consistency tests
+│   ├── filedialog.rs     # Native file dialog
+│   ├── win_util.rs       # Small helpers: wide strings / CREATE_NO_WINDOW / DPAPI, …
+│   └── assets/           # Embedded resources: card base images (id4/id5/id6/id8/aime), game cover logos, launcher.ico
+├── locales/              # Interface texts per language (zh-CN.yml / en.yml / ja.yml, embedded at build time)
+└── games_db.json         # Game database (hand-maintained, embedded at build time)
 ```

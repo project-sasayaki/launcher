@@ -11,8 +11,7 @@ use serde_json::json;
 
 use crate::roomdir::{JoinInfo, RoomDirClient};
 use crate::storage::RoomConfig;
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 use crate::win_util::CREATE_NO_WINDOW;
 const LOCAL_API_HOST: &str = "127.0.0.1";
@@ -123,12 +122,12 @@ impl AwlManager {
 
     pub fn my_peer_id() -> Result<String, String> {
         let v = Self::read_json_config().ok_or_else(|| {
-            t!("awl 身份未初始化", "awl identity not initialized").to_string()
+            t!("awl.awl_identity_not_initialized").to_string()
         })?;
         v.pointer("/p2pNode/peerId")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| t!("awl 身份缺失（peerId）", "awl identity missing (peerId)").to_string())
+            .ok_or_else(|| t!("awl.awl_identity_missing").to_string())
     }
 
     fn has_identity() -> bool {
@@ -144,7 +143,7 @@ impl AwlManager {
     fn write_config(ip_net: &str, ip_net2: Option<&str>, disable_tun: bool) -> Result<(), String> {
         let dir = Self::data_dir();
         std::fs::create_dir_all(&dir).map_err(|e| {
-            tf!("创建 awl 数据目录失败：{e}", "Failed to create awl data dir: {e}")
+            t!("awl.failed_to_create_awl_data", error = e).to_string()
         })?;
         let old = Self::read_json_config();
         let identity = old
@@ -191,12 +190,12 @@ impl AwlManager {
             "dns": { "disableDNS": true },
         });
         std::fs::write(Self::config_path(), serde_json::to_string_pretty(&cfg).unwrap())
-            .map_err(|e| tf!("写入 awl 配置失败：{e}", "Failed to write awl config: {e}"))
+            .map_err(|e| t!("awl.failed_to_write_awl_config", error = e).to_string())
     }
 
     fn local_request(verb: &str, path: &str, body: Option<&str>) -> Result<(u16, String), String> {
         let mut stream = TcpStream::connect((LOCAL_API_HOST, LOCAL_API_PORT))
-            .map_err(|e| tf!("连接 awl API 失败：{e}", "Cannot reach awl API: {e}"))?;
+            .map_err(|e| t!("awl.cannot_reach_awl_api", error = e).to_string())?;
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|e| e.to_string())?;
@@ -208,18 +207,18 @@ impl AwlManager {
         use std::io::Write;
         stream
             .write_all(req.as_bytes())
-            .map_err(|e| tf!("发送 awl API 请求失败：{e}", "Failed to send awl API request: {e}"))?;
+            .map_err(|e| t!("awl.failed_to_send_awl_api", error = e).to_string())?;
         let mut resp = Vec::new();
         stream
             .read_to_end(&mut resp)
-            .map_err(|e| tf!("读取 awl API 响应失败：{e}", "Failed to read awl API response: {e}"))?;
+            .map_err(|e| t!("awl.failed_to_read_awl_api", error = e).to_string())?;
         let text = String::from_utf8_lossy(&resp);
         let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
         let status: u16 = head
             .split_whitespace()
             .nth(1)
             .and_then(|s| s.parse().ok())
-            .ok_or_else(|| t!("awl API 响应异常", "Unexpected awl API response").to_string())?;
+            .ok_or_else(|| t!("awl.unexpected_awl_api_response").to_string())?;
         Ok((status, body.to_string()))
     }
 
@@ -237,7 +236,7 @@ impl AwlManager {
             .stderr(Stdio::piped())
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
-            .map_err(|e| tf!("无法执行 awl-tray.exe：{e}", "Cannot execute awl-tray.exe: {e}"))?;
+            .map_err(|e| t!("awl.cannot_execute_awl_tray_exe", error = e).to_string())?;
         let deadline = Instant::now() + VERSION_CHECK_TIMEOUT;
         loop {
             match child.try_wait() {
@@ -248,20 +247,17 @@ impl AwlManager {
                 Ok(None) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(t!(
-                        "awl-tray.exe -v 未在时限内退出（疑似旧版本常驻运行或被杀软拦截），请更新 tools/awl/ 下的 awl-tray.exe",
-                        "awl-tray.exe -v did not exit in time (possibly an old resident build or blocked by antivirus); please update awl-tray.exe under tools/awl/"
-                    )
+                    return Err(t!("awl.awl_tray_exe_v_did")
                     .to_string());
                 }
                 Err(e) => {
-                    return Err(tf!("无法执行 awl-tray.exe：{e}", "Cannot execute awl-tray.exe: {e}"))
+                    return Err(t!("awl.cannot_execute_awl_tray_exe", error = e).to_string())
                 }
             }
         }
         let out = child
             .wait_with_output()
-            .map_err(|e| tf!("无法执行 awl-tray.exe：{e}", "Cannot execute awl-tray.exe: {e}"))?;
+            .map_err(|e| t!("awl.cannot_execute_awl_tray_exe", error = e).to_string())?;
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
@@ -270,11 +266,7 @@ impl AwlManager {
         if text.contains(AWL_VERSION_EXPECT) {
             Ok(())
         } else {
-            Err(tf!(
-                "awl-tray.exe 版本不符：期望 {AWL_VERSION_EXPECT}，实际：{}",
-                "awl-tray.exe version mismatch: expected {AWL_VERSION_EXPECT}, got: {}",
-                text.trim()
-            ))
+            Err(t!("awl.awl_tray_exe_version_mismatch", awl_version_expect = AWL_VERSION_EXPECT, text = text.trim()).to_string())
         }
     }
 
@@ -390,7 +382,7 @@ impl AwlManager {
             }
             if Instant::now() >= deadline {
                 drop(handle);
-                return Err(t!("awl 未能在时限内生成身份", "awl failed to mint identity in time").to_string());
+                return Err(t!("awl.awl_failed_to_mint_identity").to_string());
             }
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -403,10 +395,7 @@ impl AwlManager {
                 Err(SpawnWaitFail::Exited(msg)) => return Err(msg),
                 Err(SpawnWaitFail::NotReady) => {
                     if attempt == 1 {
-                        return Err(t!(
-                            "awl API 未在时限内就绪（首次运行需初始化虚拟网卡，可能较慢；请再试一次）",
-                            "awl API did not become ready in time (first run initializes the virtual adapter and can be slow; please retry)"
-                        )
+                        return Err(t!("awl.awl_api_did_not_become")
                         .to_string());
                     }
                 }
@@ -422,11 +411,7 @@ impl AwlManager {
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
         let mut child = cmd.spawn().map_err(|e| {
-            SpawnWaitFail::Exited(tf!(
-                "启动 awl 失败（{}）：{e}",
-                "Failed to start awl ({}): {e}",
-                exe.display()
-            ))
+            SpawnWaitFail::Exited(t!("awl.failed_to_start_awl", exe = exe.display(), error = e).to_string())
         })?;
         let job = crate::vpn::attach_job(&child);
 
@@ -435,10 +420,7 @@ impl AwlManager {
             if let Ok(Some(_)) = child.try_wait() {
                 crate::vpn::close_job(job);
                 let _ = child.wait();
-                return Err(SpawnWaitFail::Exited(t!(
-                    "awl 启动后立即退出（常见原因：杀软拦截或缺少管理员权限）",
-                    "awl exited immediately (common causes: antivirus or missing admin rights)"
-                )
+                return Err(SpawnWaitFail::Exited(t!("awl.awl_exited_immediately")
                 .to_string()));
             }
             match Self::local_request("GET", "/api/v0/peers/get_known", None) {
@@ -496,7 +478,7 @@ impl AwlManager {
             Self::local_request("POST", "/api/v0/peers/invite_peer", Some(&invite.to_string()))?;
 
         if status != 200 && !body.contains("already been added") {
-            return Err(tf!("invite 房主失败：{body}", "Failed to invite host: {body}"));
+            return Err(t!("awl.failed_to_invite_host", body = body).to_string());
         }
 
         let deadline = Instant::now() + LINK_TIMEOUT;
@@ -508,7 +490,7 @@ impl AwlManager {
                 break;
             }
             if Instant::now() >= deadline {
-                return Err(t!("等待房主确认超时", "Timed out waiting for host confirmation").to_string());
+                return Err(t!("awl.timed_out_waiting_for_host").to_string());
             }
             std::thread::sleep(Duration::from_secs(1));
         }
@@ -526,7 +508,7 @@ impl AwlManager {
             Some(&update.to_string()),
         )?;
         if status != 200 {
-            return Err(tf!("修正房主 IP 失败：{body}", "Failed to update host IP: {body}"));
+            return Err(t!("awl.failed_to_update_host_ip", body = body).to_string());
         }
         Ok(())
     }
@@ -542,7 +524,7 @@ impl AwlManager {
             Self::local_request("POST", "/api/v0/peers/invite_peer", Some(&invite.to_string()))?;
 
         if status != 200 && !body.contains("already been added") {
-            return Err(tf!("invite 成员失败：{body}", "Failed to invite member: {body}"));
+            return Err(t!("awl.failed_to_invite_member", body = body).to_string());
         }
         let update = json!({
             "peerId": member_peer_id,
@@ -556,10 +538,7 @@ impl AwlManager {
             Some(&update.to_string()),
         )?;
         if status != 200 {
-            return Err(tf!(
-                "校正成员座位 IP 失败：{body}",
-                "Failed to correct member seat IP: {body}"
-            ));
+            return Err(t!("awl.failed_to_correct_member_seat", body = body).to_string());
         }
         Ok(())
     }
@@ -582,11 +561,7 @@ impl AwlManager {
     ) -> Result<(AwlHandle, String), String> {
         let exe = Self::exe_path(room_cfg);
         if !exe.is_file() {
-            return Err(tf!(
-                "找不到 awl-tray.exe：{}\n（请将 awl-tray.exe 放入 tools/awl/，或在 config.ini 的 [room] 设置 awl= 绝对路径）",
-                "awl-tray.exe not found: {}\n(Put awl-tray.exe under tools/awl/, or set awl= absolute path in config.ini [room])",
-                exe.display()
-            ));
+            return Err(t!("awl.awl_tray_exe_not_found", exe = exe.display()).to_string());
         }
         Self::version_check(&exe)?;
         Self::ensure_identity(&exe)?;
@@ -626,13 +601,7 @@ impl AwlManager {
     ) -> Result<AwlHandle, String> {
         let exe = Self::exe_path(room_cfg);
         if !exe.is_file() {
-            return Err(tf!(
-                "找不到 awl-tray.exe：{}
-（请将 awl-tray.exe 放入 tools/awl/，或在 config.ini 的 [room] 设置 awl= 绝对路径）",
-                "awl-tray.exe not found: {}
-(Put awl-tray.exe under tools/awl/, or set awl= absolute path in config.ini [room])",
-                exe.display()
-            ));
+            return Err(t!("awl.awl_tray_exe_not_found", exe = exe.display()).to_string());
         }
         Self::version_check(&exe)?;
         Self::ensure_identity(&exe)?;
@@ -658,11 +627,7 @@ impl AwlManager {
     ) -> Result<(AwlHandle, JoinInfo), String> {
         let exe = Self::exe_path(room_cfg);
         if !exe.is_file() {
-            return Err(tf!(
-                "找不到 awl-tray.exe：{}\n（请将 awl-tray.exe 放入 tools/awl/，或在 config.ini 的 [room] 设置 awl= 绝对路径）",
-                "awl-tray.exe not found: {}\n(Put awl-tray.exe under tools/awl/, or set awl= absolute path in config.ini [room])",
-                exe.display()
-            ));
+            return Err(t!("awl.awl_tray_exe_not_found", exe = exe.display()).to_string());
         }
         Self::version_check(&exe)?;
         Self::ensure_identity(&exe)?;

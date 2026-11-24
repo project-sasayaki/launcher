@@ -6,13 +6,12 @@ use std::time::Duration;
 use windows_reactor::*;
 
 use crate::i18n::Lang;
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 use crate::update::{self, TargetStatus, UpdateIndex, UpdatePhase, UpdateState, UpdateTarget};
 
 use crate::reactor_app::Launcher;
 use crate::reactor_app::message::{Dialog, Message};
-use crate::reactor_app::widgets::{separator, settings_row, settings_toggle};
+use crate::reactor_app::widgets::{separator, settings_card, settings_row, settings_toggle};
 
 const COLOR_GREY: Color = Color::argb(255, 0x9E, 0x9E, 0x9E);
 const COLOR_OK: Color = Color::argb(255, 0x6C, 0xCB, 0x5F);
@@ -115,20 +114,14 @@ impl Launcher {
     pub(in crate::reactor_app) fn update_all_loaders(&mut self, context: &ComponentContext<Self>) {
         if self.game_running {
             self.dialog = Dialog::Error {
-                message: t!(
-                    "游戏运行中，无法更新；请先退出游戏",
-                    "Cannot update while a game is running"
-                )
+                message: t!("page_settings.cannot_update_while_game_is")
                 .to_string(),
             };
             return;
         }
         if self.launcher_update_pending() {
             self.dialog = Dialog::Error {
-                message: t!(
-                    "启动器有可用更新，请先更新启动器",
-                    "Launcher update available; update the launcher first"
-                )
+                message: t!("page_settings.launcher_update_available")
                 .to_string(),
             };
             return;
@@ -167,7 +160,7 @@ impl Launcher {
                 .padding(Thickness::new(20.0, 14.0, 20.0, 18.0))
                 .content(
                     TextBlock::new()
-                        .text(t!("无", "None"))
+                        .text(t!("page_settings.none"))
                         .font_size(13.0)
                         .opacity(0.5)
                         .horizontal_alignment(HorizontalAlignment::Center),
@@ -186,9 +179,9 @@ impl Launcher {
 
         let mut cells: Vec<KeyedView> = Vec::new();
         let headers = [
-            t!("组件", "Component").to_string(),
-            t!("版本", "Version").to_string(),
-            t!("状态", "Status").to_string(),
+            t!("page_settings.component").to_string(),
+            t!("page_settings.version").to_string(),
+            t!("common.status").to_string(),
             String::new(),
         ];
         for (c, txt) in headers.iter().enumerate() {
@@ -239,17 +232,17 @@ impl Launcher {
                 0.0
             };
             let (label, color) = match ts.state {
-                UpdateState::NotConfigured => (t!("未配置更新源", "Update source not configured"), COLOR_GREY),
-                UpdateState::Checking => (t!("检查中…", "Checking…"), COLOR_WARN),
-                UpdateState::UpToDate => (t!("已是最新", "Up to date"), COLOR_OK),
-                UpdateState::Outdated => (t!("有更新", "Update available"), COLOR_WARN),
-                UpdateState::Error => (t!("错误", "Error"), COLOR_ERR),
+                UpdateState::NotConfigured => (t!("page_settings.update_source_not_configured"), COLOR_GREY),
+                UpdateState::Checking => (t!("page_settings.checking"), COLOR_WARN),
+                UpdateState::UpToDate => (t!("page_settings.up_to_date"), COLOR_OK),
+                UpdateState::Outdated => (t!("common.update_available"), COLOR_WARN),
+                UpdateState::Error => (t!("common.error"), COLOR_ERR),
             };
             let phase_text = match ts.phase {
-                UpdatePhase::Downloading => t!("下载中", "Downloading"),
-                UpdatePhase::Extracting => t!("解压中", "Extracting"),
-                UpdatePhase::Installing => t!("安装中", "Installing"),
-                _ => "",
+                UpdatePhase::Downloading => t!("page_settings.downloading"),
+                UpdatePhase::Extracting => t!("page_settings.extracting"),
+                UpdatePhase::Installing => t!("page_settings.installing"),
+                _ => "".into(),
             };
 
             let version_cell: View = if active {
@@ -341,7 +334,7 @@ impl Launcher {
                         .grid_row(row)
                         .grid_column(3)
                         .vertical_alignment(VerticalAlignment::Center)
-                        .content(t!("取消", "Cancel")),
+                        .content(t!("common.cancel").to_string()),
                 )
             } else if ts.state == UpdateState::Outdated
                 && (*target == UpdateTarget::Launcher || !launcher_pending)
@@ -352,7 +345,7 @@ impl Launcher {
                         .grid_row(row)
                         .grid_column(3)
                         .vertical_alignment(VerticalAlignment::Center)
-                        .content(t!("更新", "Update")),
+                        .content(t!("page_settings.update").to_string()),
                 )
             } else {
                 View::from(
@@ -412,17 +405,24 @@ impl Launcher {
             .into()
     }
 
+    /// Saves the keychip, which is the launcher's, into `config.ini`.
+    pub(in crate::reactor_app) fn save_keychip(&mut self) {
+        if let Err(e) = self.store.save_keychip(self.keychip.as_deref()) {
+            self.dialog = Dialog::Error {
+                message: t!("common.failed_to_save_config_ini", error = e).to_string(),
+            };
+        }
+    }
+
     pub(in crate::reactor_app) fn settings_page(&self, context: &mut ViewContext<Self>) -> View {
-        let lang_items: Vec<String> = vec![
-            t!("中文", "Chinese").to_string(),
-            "English".to_string(),
-        ];
-        let lang_idx = if self.lang == Lang::En { 1 } else { 0 };
+        // Each language is listed by its own name, so it can be found whatever is shown now.
+        let lang_items: Vec<String> = Lang::ALL.iter().map(|l| l.native_name().to_string()).collect();
+        let lang_idx = Lang::ALL.iter().position(|l| *l == self.lang).unwrap_or(0);
 
         let title: View = StackPanel::new()
             .children([View::from(
                 TextBlock::new()
-                    .text(t!("设置", "Settings"))
+                    .text(t!("nav.settings"))
                     .font_size(26.0)
                     .font_weight(FontWeight::SEMI_BOLD),
             )])
@@ -436,7 +436,7 @@ impl Launcher {
             .border_thickness(1.0)
             .content(settings_row(
                 SymbolIcon::new().symbol(Symbol::Setting).into(),
-                t!("启动器版本", "Launcher version"),
+                &t!("page_settings.launcher_version"),
                 View::from(
                     TextBlock::new()
                         .text(format!("v{}", crate::APP_VERSION))
@@ -453,7 +453,7 @@ impl Launcher {
             .border_thickness(1.0)
             .content(settings_row(
                 SymbolIcon::new().symbol(Symbol::Globe).into(),
-                t!("语言", "Language"),
+                &t!("page_settings.language"),
                 ComboBox::new()
                     .width(180.0)
                     .items_source(lang_items)
@@ -471,16 +471,30 @@ impl Launcher {
             .border_thickness(1.0)
             .content(settings_row(
                 SymbolIcon::new().symbol(Symbol::Globe).into(),
-                t!("服务器地址", "Server address"),
+                &t!("page_settings.server_address"),
                 View::from(
                     TextBox::new()
                         .width(360.0)
-                        .placeholder_text(t!("默认 sdgt.arcadehub.xyz", "default sdgt.arcadehub.xyz"))
+                        .placeholder_text(t!("page_settings.default_sdgt_arcadehub_xyz"))
                         .text(self.net.server.clone().unwrap_or_default())
                         .on_text_changed(context.callback(Message::ServerHostChanged))
                         .vertical_alignment(VerticalAlignment::Center),
                 ),
             ));
+
+        // The keychip names this PC to the server and in the rooms, whatever game it runs.
+        let keychip_row = settings_row(
+            SymbolIcon::new().symbol(Symbol::Admin).into(),
+            "Keychip",
+            TextBox::new()
+                .width(225.0)
+                .text(self.keychip.clone().unwrap_or_default())
+                .placeholder_text("A69E-01A99999999")
+                .on_text_changed(context.callback(Message::KeychipChanged))
+                .vertical_alignment(VerticalAlignment::Center)
+                .into(),
+        );
+        let keychip_card = settings_card(vec![KeyedView::new("keychip", keychip_row)]);
 
         let nick_card = Border::new()
             .horizontal_alignment(HorizontalAlignment::Stretch)
@@ -490,11 +504,11 @@ impl Launcher {
             .border_thickness(1.0)
             .content(settings_row(
                 SymbolIcon::new().symbol(Symbol::Contact).into(),
-                t!("房间昵称", "Room nickname"),
+                &t!("page_settings.room_nickname"),
                 View::from(
                     TextBox::new()
                         .width(360.0)
-                        .placeholder_text(t!("例如：player1234", "e.g. player1234"))
+                        .placeholder_text(t!("page_settings.nickname_placeholder"))
                         .text(self.room.nickname.clone().unwrap_or_default())
                         .on_text_changed(context.callback(Message::RoomNickChanged))
                         .vertical_alignment(VerticalAlignment::Center),
@@ -513,7 +527,7 @@ impl Launcher {
                     .children((
                     settings_row(
                         SymbolIcon::new().symbol(Symbol::Manage).into(),
-                        t!("自动检查更新", "Automatically check for updates"),
+                        &t!("page_settings.automatically_check_for_updates"),
                         settings_toggle(
                             self.settings.auto_check_updates,
                             true,
@@ -523,10 +537,10 @@ impl Launcher {
                     separator(),
                     settings_row(
                         SymbolIcon::new().symbol(Symbol::Repair).into(),
-                        t!("检查更新", "Check for updates"),
+                        &t!("page_settings.check_for_updates"),
                         Button::new()
                             .on_click(context.message(Message::CheckUpdatesNow))
-                            .content(t!("立即检查", "Check now"))
+                            .content(t!("page_settings.check_now").to_string())
                             .into(),
                     ),
                     separator(),
@@ -540,7 +554,7 @@ impl Launcher {
             .column_spacing(16.0)
             .children((
                 TextBlock::new()
-                    .text(t!("组件更新", "Component updates"))
+                    .text(t!("page_settings.component_updates"))
                     .font_size(20.0)
                     .font_weight(FontWeight::SEMI_BOLD)
                     .vertical_alignment(VerticalAlignment::Center)
@@ -550,7 +564,7 @@ impl Launcher {
                     .style(ButtonStyle::Accent)
                     .vertical_alignment(VerticalAlignment::Center)
                     .grid_column(1)
-                    .content(t!("全部更新", "Update all")),
+                    .content(t!("page_settings.update_all").to_string()),
             ))
             .into();
 
@@ -567,6 +581,7 @@ impl Launcher {
                         version_card,
                         lang_card,
                         server_card,
+                        keychip_card,
                         nick_card,
                         update_card,
                         components_title,
@@ -591,11 +606,12 @@ impl Launcher {
                     .filter_map(|t| {
                         s.per_target.get(t).and_then(|ts| {
                             (ts.state == UpdateState::Outdated).then(|| {
-                                format!(
-                                    "{}　{}",
-                                    t.display_name(),
-                                    ts.remote_version.as_deref().unwrap_or("?")
+                                t!(
+                                    "page_settings.component_with_version",
+                                    component = t.display_name(),
+                                    version = ts.remote_version.as_deref().unwrap_or("?")
                                 )
+                                .to_string()
                             })
                         })
                     })
@@ -620,7 +636,7 @@ impl Launcher {
                 }
             }
             self.dialog = Dialog::Error {
-                message: tf!("检查更新失败：{e}", "Update check failed: {e}"),
+                message: t!("page_settings.update_check_failed", error = e).to_string(),
             };
         }
         }
@@ -652,27 +668,21 @@ impl Launcher {
         };
         if url.is_none() {
             self.dialog = Dialog::Error {
-                message: t!("没有可用的下载地址", "No download URL available").to_string(),
+                message: t!("page_settings.no_download_url_available").to_string(),
             };
             return;
         }
 
         if self.game_running {
             self.dialog = Dialog::Error {
-                message: t!(
-                    "游戏运行中，无法更新；请先退出游戏",
-                    "Cannot update while a game is running"
-                )
+                message: t!("page_settings.cannot_update_while_game_is")
                 .to_string(),
             };
             return;
         }
         if target != UpdateTarget::Launcher && self.launcher_update_pending() {
             self.dialog = Dialog::Error {
-                message: t!(
-                    "启动器有可用更新，请先更新启动器",
-                    "Launcher update available; update the launcher first"
-                )
+                message: t!("page_settings.launcher_update_available")
                 .to_string(),
             };
             return;
@@ -758,7 +768,7 @@ impl Launcher {
                 }
             }
 
-            self.detected = crate::launch::detect_loaders();
+            self.detected = crate::loaders::detect_loaders();
         }
         Err(e) => {
             if let Ok(mut s) = self.update_shared.lock() {
@@ -768,7 +778,7 @@ impl Launcher {
                 }
             }
             self.dialog = Dialog::Error {
-                message: tf!("更新失败：{e}", "Update failed: {e}"),
+                message: t!("page_settings.update_failed", error = e).to_string(),
             };
         }
         }

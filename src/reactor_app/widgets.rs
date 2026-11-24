@@ -5,11 +5,9 @@ use windows_reactor::*;
 use crate::db;
 use crate::rawinput;
 use crate::storage::{DPAD_CODE_BASE, GameRecord};
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 use super::message::Message;
-use super::pages::games::{ROW_COVER_H, ROW_COVER_W};
 use super::Launcher;
 
 pub(super) fn row_chip(label: &str) -> View {
@@ -23,26 +21,35 @@ pub(super) fn row_chip(label: &str) -> View {
 pub(super) fn binding_label(value: u32) -> String {
     use rawinput::{DPAD_DOWN, DPAD_LEFT, DPAD_RIGHT, DPAD_UP};
     match value.checked_sub(DPAD_CODE_BASE) {
-        Some(DPAD_UP) => t!("十字键 上", "D-pad Up").to_string(),
-        Some(DPAD_RIGHT) => t!("十字键 右", "D-pad Right").to_string(),
-        Some(DPAD_DOWN) => t!("十字键 下", "D-pad Down").to_string(),
-        Some(DPAD_LEFT) => t!("十字键 左", "D-pad Left").to_string(),
-        _ => tf!("按钮 {}", "Button {}", value),
+        Some(DPAD_UP) => t!("widgets.d_pad_up").to_string(),
+        Some(DPAD_RIGHT) => t!("widgets.d_pad_right").to_string(),
+        Some(DPAD_DOWN) => t!("widgets.d_pad_down").to_string(),
+        Some(DPAD_LEFT) => t!("widgets.d_pad_left").to_string(),
+        _ => t!("widgets.button", value = value).to_string(),
     }
 }
 
 pub(super) fn record_db_match_ref(game: &GameRecord) -> Option<&'static db::DbMatch> {
-    let s = game.crc.as_deref()?;
-    let s = s
-        .strip_prefix("0x")
-        .or_else(|| s.strip_prefix("0X"))
-        .unwrap_or(s);
-    let crc = u32::from_str_radix(s, 16).ok()?;
-    db::lookup_ref(crc, game.loader)
+    db::lookup_record(game)
 }
 
 pub(super) fn record_db_match(game: &GameRecord) -> Option<db::DbMatch> {
     record_db_match_ref(game).cloned()
+}
+
+/// The name of a library game's built-in cover: the database's, which may be newer than
+/// the one saved when the game was added, else the saved one.
+pub(super) fn builtin_cover_name(game: &GameRecord) -> Option<String> {
+    record_db_match_ref(game).and_then(|matched| matched.image.clone()).or_else(|| game.cover.clone())
+}
+
+/// The name of a library game's platform: the database's, which may be newer than the one
+/// saved when the game was added, else the saved one, else its loader's.
+pub(super) fn platform_name(game: &GameRecord) -> String {
+    record_db_match_ref(game)
+        .and_then(|matched| matched.platform.clone())
+        .or_else(|| game.platform.clone())
+        .unwrap_or_else(|| game.loader.platform().to_string())
 }
 
 pub(super) fn record_matches_product(game: &GameRecord, product: &str) -> bool {
@@ -69,22 +76,17 @@ pub(super) fn record_matches_product(game: &GameRecord, product: &str) -> bool {
     }
 }
 
-pub(super) fn row_placeholder(name: &str) -> View {
-    let ch: String = name.chars().take(3).collect();
-    Border::new()
-        .width(ROW_COVER_W)
-        .height(ROW_COVER_H)
-        .corner_radius(4.0)
-        .background(ThemeBrush::CardStroke)
-        .content(
-            TextBlock::new()
-                .text(ch)
-                .font_size(18.0)
-                .font_weight(FontWeight::SEMI_BOLD)
-                .opacity(0.5)
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
+/// The cover shown for a game that has neither a cover of its own nor a built-in one.
+const FALLBACK_COVER_PNG: &[u8] = include_bytes!("../assets/cover_wip.png");
+
+/// The fallback cover, fitted into `width` × `height`.
+pub(super) fn fallback_cover(width: f64, height: f64) -> View {
+    Image::new()
+        .source_data(EncodedImage::new(std::sync::Arc::<[u8]>::from(FALLBACK_COVER_PNG)))
+        .width(width)
+        .height(height)
+        .stretch(Stretch::Uniform)
+        .into()
 }
 
 pub(super) fn settings_section(title: &str, rows: Vec<KeyedView>) -> View {
@@ -97,18 +99,20 @@ pub(super) fn settings_section(title: &str, rows: Vec<KeyedView>) -> View {
                 .text(title)
                 .font_size(16.0)
                 .font_weight(FontWeight::SEMI_BOLD),
-            Border::new()
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .corner_radius(4.0)
-                .background(ThemeBrush::CardBackground)
-                .border_brush(ThemeBrush::CardStroke)
-                .border_thickness(1.0)
-                .content(
-                    StackPanel::new()
-                        .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .keyed_children(rows),
-                ),
+            settings_card(rows),
         ))
+        .into()
+}
+
+/// A card of settings rows, in the Windows 11 Settings style.
+pub(super) fn settings_card(rows: Vec<KeyedView>) -> View {
+    Border::new()
+        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .corner_radius(4.0)
+        .background(ThemeBrush::CardBackground)
+        .border_brush(ThemeBrush::CardStroke)
+        .border_thickness(1.0)
+        .content(StackPanel::new().horizontal_alignment(HorizontalAlignment::Stretch).keyed_children(rows))
         .into()
 }
 
@@ -161,7 +165,7 @@ pub(super) fn selectable_text(text: impl Into<String>) -> TextBlock {
 }
 
 pub(super) fn settings_toggle<C: IntoPayloadCallback<bool>>(on: bool, enabled: bool, callback: C) -> View {
-    let state_text = if on { t!("开", "On") } else { t!("关", "Off") };
+    let state_text = if on { t!("widgets.on") } else { t!("widgets.off") };
     StackPanel::new()
         .orientation(Orientation::Horizontal)
         .spacing(8.0)
@@ -224,7 +228,7 @@ mod tests {
         let r = record(Loader::Mice, Some("0x1fd6136a"), Some("SBZZ"), Some("2.01"), "InitialD Arcade Stage 8 JPN");
         assert!(record_matches_product(&r, "InitialD Arcade Stage 8 JPN"));
         assert!(!record_matches_product(&r, "InitialD Arcade Stage 8 EXP"));
-        assert!(!record_matches_product(&r, ""), "空产品名不匹配");
+        assert!(!record_matches_product(&r, ""), "an empty product name does not match");
     }
 
     #[test]
@@ -281,7 +285,7 @@ pub(super) fn placeholder_page(title: &str, desc: &str) -> View {
                 .padding(Thickness::new(20.0, 28.0, 20.0, 28.0))
                 .content(
                     TextBlock::new()
-                        .text(t!("此页面正在建设中，设置项将逐步开放。", "This page is under construction; settings will be added gradually."))
+                        .text(t!("widgets.this_page_is_under_construction"))
                         .font_size(13.0)
                         .opacity(0.6)
                         .horizontal_alignment(HorizontalAlignment::Center),

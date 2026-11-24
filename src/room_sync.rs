@@ -493,7 +493,7 @@ mod tests {
                 assert_eq!(nick.as_deref(), Some("玩家"));
                 assert!(playing);
             }
-            _ => panic!("应解析为 hello"),
+            _ => panic!("should parse as hello"),
         }
     }
 
@@ -508,7 +508,7 @@ mod tests {
                 assert_eq!(nick, None);
                 assert!(playing);
             }
-            _ => panic!("应解析为 status"),
+            _ => panic!("should parse as status"),
         }
     }
 

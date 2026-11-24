@@ -18,24 +18,23 @@ use crate::cards::{self, CardScan};
 use crate::awl::{AwlHandle, PeerView, RoomStatus};
 use crate::filedialog;
 use crate::i18n::{self, Lang};
-use crate::launch;
+use crate::loaders;
 use crate::netinfo::{self, AdapterInfo};
 use crate::rawinput;
 use crate::roomdir::RoomSummary;
 use crate::server::{self, ServerState};
 use crate::storage::{self, Library, Settings, VpnConfig};
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 use crate::update::{HttpAbort, UpdatePhase, UpdateState, UpdateStatus, UpdateTarget};
 use crate::vpn::{VpnHandle, VpnStatus};
 
 use self::message::{Dialog, Message};
 use self::widgets::spawn_anim_tick;
 use self::pages::graphics::{GFX_AF_LEVELS, GFX_MSAA_LEVELS, GFX_RENDER_SCALE_LEVELS, GFX_RESOLUTIONS};
-use self::pages::input::{capture_label, FFB_MAX, INPUT_KINDS, INPUT_RATIO_DEFAULT, INPUT_RATIO_MAX, SHIFTER_TYPES};
+use self::pages::input::{FFB_MAX, INPUT_KINDS, INPUT_RATIO_DEFAULT, INPUT_RATIO_MAX, SHIFTER_TYPES};
 use self::pages::network::{VPN_AUTO_RETRIES, VPN_STABLE_RESET};
 use self::pages::system::{SYS_LOGLEVELS, SYS_SEATS};
-use self::state::{CardBaseCache, GameRuntime, PendingAdd, ServerBoxRuntime};
+use self::state::{CardBaseCache, CardImage, GameRuntime, PendingAdd, ServerBoxRuntime};
 use self::theme::system_uses_light_theme;
 
 const APP_ICON: &[u8] = include_bytes!("assets/launcher.ico");
@@ -44,7 +43,7 @@ pub struct Launcher {
     store: storage::Store,
     library: Library,
     settings: Settings,
-    detected: launch::LoaderPaths,
+    detected: loaders::LoaderPaths,
     server_state: ServerState,
     nav_tag: String,
     pane_open: bool,
@@ -57,15 +56,31 @@ pub struct Launcher {
 
     net: storage::NetworkConfig,
 
-    system: storage::SystemConfig,
+    /// The keychip serial, the launcher's own: it also names this PC in the rooms.
+    keychip: Option<String>,
 
     lang: Lang,
+
+    /// The record id of the game whose settings page is open (or was last opened).
+    settings_game: Option<String>,
+
+    /// The tab shown on the game's settings page.
+    settings_tab: pages::game_settings::SettingsTab,
+
+    // The settings of `settings_game`, loaded from its own file when its settings page
+    // opens and saved there on every change.
+    system: storage::SystemConfig,
 
     coin: storage::CoinConfig,
 
     graphics: storage::GraphicsConfig,
 
     input: storage::InputConfig,
+
+    wmmt3: crate::games::Wmmt3Settings,
+
+    /// The DirectInput devices offered on a WMMT3 game's Input tab.
+    wmmt3_devices: Vec<rawinput::GameDevice>,
 
     vpn: VpnConfig,
 
@@ -181,13 +196,7 @@ pub struct Launcher {
 
     cards_game: Option<usize>,
 
-    cards_aime: bool,
-
-    cards_id4: bool,
-
-    cards_id8: bool,
-
-    cards_id6: bool,
+    card_kind: crate::games::CardKind,
 
     cards_loading: bool,
 
@@ -206,7 +215,7 @@ pub struct Launcher {
 
     dpi_placeholder: Arc<Vec<u8>>,
 
-    compose_cache: RefCell<HashMap<PathBuf, Result<(Arc<[u8]>, f64, f64), Arc<str>>>>,
+    card_image_cache: RefCell<HashMap<PathBuf, Result<CardImage, Arc<str>>>>,
 
     base_cache: RefCell<Option<CardBaseCache>>,
 
@@ -242,15 +251,14 @@ impl Component for Launcher {
         let library = store.load_library();
         let settings = store.load_settings();
         let net = store.load_network();
-        let system = store.load_system();
-        let coin = store.load_coin();
-        let graphics = store.load_graphics();
-        let input = store.load_input();
+        let keychip = store.load_system().keychip;
+        // Settings config.ini kept for every game move into each game's own file.
+        let moved = store.move_shared_settings(&library.games);
         let vpn = store.load_vpn();
         let room = store.load_room();
         let lang = store.load_lang();
         i18n::set_lang(lang);
-        let detected = launch::detect_loaders();
+        let detected = loaders::detect_loaders();
 
         let server_host0 = net.server_host().to_string();
         context.spawn_background(move |_| {
@@ -259,13 +267,6 @@ impl Component for Launcher {
         });
 
         context.spawn_background(|_| Message::AdaptersScanned(Box::new(netinfo::list_adapters())));
-
-        let input_kind = input.kind.clone();
-        context.spawn_background(move |_| {
-            Message::InputDevicesScanned(Box::new(rawinput::list_input_devices(
-                input_kind.as_deref(),
-            )))
-        });
 
         let mut launcher = Launcher {
             store,
@@ -280,11 +281,16 @@ impl Component for Launcher {
             adapters: Vec::new(),
             adapters_scanned: false,
             net,
-            system,
+            keychip,
             lang,
-            coin,
-            graphics,
-            input,
+            settings_game: None,
+            settings_tab: pages::game_settings::SettingsTab::default(),
+            system: storage::SystemConfig::default(),
+            coin: storage::CoinConfig::default(),
+            graphics: storage::GraphicsConfig::default(),
+            input: storage::InputConfig::default(),
+            wmmt3: crate::games::Wmmt3Settings::default(),
+            wmmt3_devices: Vec::new(),
             vpn,
             vpn_status: VpnStatus::NotConfigured,
             vpn_handle: Arc::new(Mutex::new(None)),
@@ -343,10 +349,7 @@ impl Component for Launcher {
             hovered: None,
             light_theme: system_uses_light_theme(),
             cards_game: None,
-            cards_aime: false,
-            cards_id4: false,
-            cards_id8: false,
-            cards_id6: false,
+            card_kind: crate::games::CardKind::default(),
             cards_loading: false,
             cards_warm: 0,
             cards: CardScan::default(),
@@ -362,7 +365,7 @@ impl Component for Launcher {
                     .expect("encode 1x1 placeholder png");
                 Arc::new(buf.into_inner())
             },
-            compose_cache: RefCell::new(HashMap::new()),
+            card_image_cache: RefCell::new(HashMap::new()),
             base_cache: RefCell::new(None),
             update_shared: Arc::new(Mutex::new(UpdateStatus::default())),
             poll_running: false,
@@ -375,6 +378,8 @@ impl Component for Launcher {
             update_prompt_key: None,
             window_icon: Self::prepare_window_icon(),
         };
+
+        launcher.report_moved_settings(moved);
 
         launcher.run_check(true, context);
         context.spawn_background(move |_| {
@@ -395,6 +400,8 @@ impl Component for Launcher {
         let Some(message) = self.handle_system(message, context) else { return };
         let Some(message) = self.handle_graphics(message, context) else { return };
         let Some(message) = self.handle_input(message, context) else { return };
+        let Some(message) = self.handle_wmmt3(message, context) else { return };
+        let Some(message) = self.handle_game_settings(message, context) else { return };
         let Some(message) = self.handle_vpn(message, context) else { return };
         let Some(message) = self.handle_room(message, context) else { return };
         match message {
@@ -404,7 +411,6 @@ impl Component for Launcher {
 
                 if self.nav_tag == "room" {
                     let keychip_missing = self
-                        .system
                         .keychip
                         .as_deref()
                         .map(|v| v.trim().is_empty())
@@ -417,15 +423,10 @@ impl Component for Launcher {
                         .unwrap_or(false);
                     if keychip_missing && !has_rejoin_memory && matches!(self.room_status, RoomStatus::Idle) {
                         self.dialog = Dialog::LaunchFailed {
-                            message: t!(
-                                "未配置 Keychip 序列号，无法使用店内对战。
-请先在「系统设置」页填写 Keychip 序列号。",
-                                "Keychip serial is not configured; In-Store Battles is unavailable.
-Fill in the Keychip serial on the System page first."
-                            ).to_string(),
+                            message: t!("app.keychip_serial_is_not_configured").to_string(),
                             goto: None,
                         };
-                        self.nav_tag = "system".to_string();
+                        self.nav_tag = "settings".to_string();
                     } else {
                         self.room_refresh_list(context, false);
                         self.room_try_resume(context);
@@ -445,16 +446,12 @@ Fill in the Keychip serial on the System page first."
                 context.spawn_background(|_| {
                     let picked = filedialog::pick_open_file(
                         &[
-
-                            (
-                                t!("所有支持的格式", "All supported"),
-                                "*.exe;*.elf;ICF1",
-                            ),
-                            (t!("游戏文件", "Executable"), "*.exe;*.elf"),
-                            (t!("ICF1 文件", "ICF1 file"), "ICF1"),
-                            (t!("所有文件", "All files"), "*.*"),
+                            (&t!("app.all_supported"), "*.exe;*.elf;ICF1;main"),
+                            (&t!("app.executable"), "*.exe;*.elf;main"),
+                            (&t!("app.icf1_file"), "ICF1"),
+                            (&t!("common.all_files"), "*.*"),
                         ],
-                        t!("选择游戏文件", "Select game file"),
+                        &t!("app.select_game_file"),
                     );
                     Message::FilePicked(picked)
                 });
@@ -481,77 +478,49 @@ Fill in the Keychip serial on the System page first."
                 }
             }
 
-            Message::CardsScanned(scan) => self.apply_cards_scanned(scan, context),
-            Message::CardClicked(index) => {
-                let Some(gi) = self.cards_game else {
-                    return;
-                };
-                let Some(name) = self.cards.cards.get(index).map(|c| c.name.clone()) else {
-                    return;
-                };
-
-                if let Some(rec) = self.library.games.get_mut(gi) {
-                    rec.card = Some(name.clone());
-                    self.store.save_library(&self.library);
-                    self.cards.active = Some(name.clone());
-                } else {
-                    self.dialog = Dialog::Error {
-                        message: t!(
-                            "保存卡片选择失败：游戏不存在",
-                            "Failed to save card selection: game no longer exists"
-                        )
-                        .to_string(),
-                    };
+            Message::CardsScanned(seq, scan) if self.is_current_card_page(seq) => {
+                self.apply_cards_scanned(*scan, context);
+            }
+            Message::CardClicked(index) if self.nav_tag == "cards" => {
+                if let Some(card) = self.cards.cards.get(index) {
+                    self.select_card(card.name.clone());
                 }
             }
-            Message::CardsLoadTick => self.warm_card_cache(context),
-            Message::AimeCardCreate => {
-                if !self.cards_aime {
-                    return;
-                }
+            Message::CardsLoadTick(seq) if self.is_current_card_page(seq) => {
+                self.warm_card_cache(context);
+            }
+            Message::AimeCardCreate
+                if self.nav_tag == "cards" && self.card_kind == crate::games::CardKind::Aime =>
+            {
                 let Some(dir) = self.aime_device_dir() else {
                     self.dialog = Dialog::Error {
-                        message: t!("未配置 amdaemon.exe，无法确定卡片目录",
-                            "amdaemon.exe is not configured; card directory unknown").to_string(),
+                        message: t!("app.amdaemon_exe_is_not_configured").to_string(),
                     };
                     return;
                 };
+                let seq = self.card_enter_seq;
                 context.spawn_background(move |_| {
-                    Message::AimeCardCreated(cards::create_aime_card_in(&dir).map_err(|e| e.to_string()))
+                    let result = cards::create_aime_card_in(&dir)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string());
+                    Message::AimeCardCreated(seq, result)
                 });
             }
-            Message::AimeCardCreated(Ok(code)) => self.reload_aime_cards(code),
-            Message::AimeCardCreated(Err(e)) => {
-                self.dialog = Dialog::Error {
-                    message: tf!("新建车卡失败：{}", "Failed to create card: {}", e),
-                };
-            }
-            Message::BlankCardSelect => {
-
-                let name = cards::blank_card_name();
-
-                if let Some(gi) = self.cards_game {
-                    if let Some(rec) = self.library.games.get_mut(gi) {
-                        rec.card = Some(name.clone());
-                        self.store.save_library(&self.library);
-                        self.cards.active = Some(name.clone());
-                    } else {
-                        self.dialog = Dialog::Error {
-                            message: t!(
-                                "保存卡片选择失败：游戏不存在",
-                                "Failed to save card selection: game no longer exists"
-                            )
-                            .to_string(),
-                        };
-                    }
+            Message::AimeCardCreated(seq, result) if self.is_current_card_page(seq) => match result {
+                Ok(()) => self.reload_aime_cards(),
+                Err(error) => {
+                    self.dialog = Dialog::Error {
+                        message: t!("app.failed_to_create_card", error = error).to_string(),
+                    };
                 }
+            },
+            Message::BlankCardSelect if self.nav_tag == "cards" => {
+                self.select_blank_card();
             }
             Message::BackToGames => {
                 self.nav_tag = "games".to_string();
                 self.cards_game = None;
-                self.cards_aime = false;
-                self.cards_id4 = false;
-                self.cards_id6 = false;
+                self.card_kind = crate::games::CardKind::default();
                 self.cards_loading = false;
                 self.cards_warm = 0;
             }
@@ -614,7 +583,7 @@ Fill in the Keychip serial on the System page first."
     }
 
     fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
-        context.window_title(t!("Sasayaki Launcher", "Sasayaki Launcher"));
+        context.window_title(t!("app.window_title"));
 
         let dpi_image = self.dpi_image.clone();
         let sender = context.sender();
@@ -639,7 +608,7 @@ Fill in the Keychip serial on the System page first."
         context.on_window_size(context.callback(Message::WindowResized));
 
         let tag = self.nav_tag.clone();
-        let nav_item = |t: &'static str, label: &'static str, icon: Symbol| {
+        let nav_item = |t: &'static str, label: &str, icon: Symbol| {
             let selected = tag == t;
             KeyedView::new(
                 t,
@@ -647,30 +616,25 @@ Fill in the Keychip serial on the System page first."
                     .tag(t)
                     .is_selected(selected)
                     .slots([
-                        SlotView::new(NavigationViewItemSlot::Content, label),
+                        SlotView::new(NavigationViewItemSlot::Content, label.to_string()),
                         SlotView::new(NavigationViewItemSlot::Icon, SymbolIcon::new().symbol(icon)),
                     ]),
             )
         };
         let menu_items = vec![
-            nav_item("games", t!("游戏", "Games"), Symbol::Play),
-            nav_item("room", t!("店内对战", "In-Store Battles"), Symbol::Shop),
-            nav_item("graphics", t!("图形设置", "Graphics"), Symbol::Video),
-            nav_item("network", t!("网络设置", "Network"), Symbol::Globe),
-            nav_item("vpn", t!("VPN 设置", "VPN"), Symbol::Permissions),
-            nav_item("system", t!("系统设置", "System"), Symbol::Setting),
-            nav_item("input", t!("输入设置", "Input"), Symbol::Keyboard),
-            nav_item("settings", t!("设置", "Settings"), Symbol::Repair),
+            nav_item("games", &t!("nav.games"), Symbol::Play),
+            nav_item("room", &t!("nav.in_store_battles"), Symbol::Shop),
+            nav_item("network", &t!("nav.network"), Symbol::Globe),
+            nav_item("vpn", &t!("nav.vpn"), Symbol::Permissions),
+            nav_item("settings", &t!("nav.settings"), Symbol::Repair),
         ];
 
         let content: View = match self.nav_tag.as_str() {
             "cards" => self.cards_page(context),
-            "graphics" => self.graphics_page(context),
+            "game_settings" => self.game_settings_page(context),
             "network" => self.network_page(context),
             "room" => self.room_page(context),
             "vpn" => self.vpn_page(context),
-            "system" => self.system_page(context),
-            "input" => self.input_page(context),
             "settings" => self.settings_page(context),
             _ => self.games_page(context),
         };
@@ -685,7 +649,7 @@ Fill in the Keychip serial on the System page first."
             .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
             .is_settings_visible(false)
             .always_show_header(false)
-            .pane_title(t!("Sasayaki 启动器", "Sasayaki Launcher"))
+            .pane_title(t!("common.app_name"))
             .on_selected_tag_changed(
                 context.callback(|opt: Option<String>| Message::NavChanged(opt)),
             )
@@ -903,11 +867,7 @@ impl Launcher {
 
                 if let Err(e) = result {
                     self.dialog = Dialog::Error {
-                        message: tf!(
-                            "删除网卡静态 IP 失败：{}",
-                            "Failed to remove static IP from adapter: {}",
-                            e
-                        ),
+                        message: t!("app.failed_to_remove_static_ip", error = e).to_string(),
                     };
                 }
             }
@@ -922,19 +882,19 @@ impl Launcher {
             Message::LogLevelSelected(Some(index)) => {
                 self.system.loglevel = SYS_LOGLEVELS
                     .get(index)
-                    .and_then(|(v, _, _)| v.map(String::from));
+                    .and_then(|(v, _)| v.map(String::from));
                 self.save_system();
             }
             Message::LogLevelSelected(None) => {}
 
             Message::LangSelected(Some(index)) => {
-                let new_lang = if index == 1 { Lang::En } else { Lang::Zh };
+                let Some(&new_lang) = Lang::ALL.get(index) else { return None };
                 if new_lang != self.lang {
                     self.lang = new_lang;
                     i18n::set_lang(new_lang);
                     if let Err(e) = self.store.save_lang(new_lang) {
                         self.dialog = Dialog::Error {
-                            message: format!("{}: {e}", t!("保存语言失败", "Failed to save language")),
+                            message: format!("{}: {e}", t!("app.failed_to_save_language")),
                         };
                     }
                 }
@@ -949,12 +909,12 @@ impl Launcher {
             }
             Message::KeychipChanged(text) => {
                 let t = text.trim().to_string();
-                self.system.keychip = (!t.is_empty()).then_some(t);
-                self.queue_save(Self::SAVE_SYSTEM, context);
+                self.keychip = (!t.is_empty()).then_some(t);
+                self.queue_save(Self::SAVE_KEYCHIP, context);
             }
             Message::SaveDebounceTick(token) => self.flush_pending_saves(token),
             Message::SeatSelected(Some(index)) => {
-                if let Some((v, _, _)) = SYS_SEATS.get(index) {
+                if let Some((v, _)) = SYS_SEATS.get(index) {
                     self.system.seat = Some(v.to_string());
 
                     if *v == "SINGLE" {
@@ -1108,18 +1068,11 @@ impl Launcher {
             Message::InputCaptured(epoch, slot, button) => self.apply_captured_button(epoch, slot, button),
             Message::InputCapturedAxis(epoch, slot, axis_name) => self.apply_captured_axis(epoch, slot, axis_name),
             Message::InputCapturedXi(epoch, slot, name) => self.apply_captured_xi_button(epoch, slot, name),
-            Message::InputCaptureTimeout(epoch, slot) => {
+            Message::InputCaptureTimeout(epoch) => {
                 if epoch != self.input_capture_gen {
                     return None;
                 }
-                if let Some((zh, en)) = capture_label(slot) {
-                    self.dialog = Dialog::Error {
-                        message: tf!("捕获「{}」超时，未检测到按键", "Capture of \"{}\" timed out; no key detected",
-                            i18n::pick(zh, en)
-                        ),
-                    };
-                }
-                self.end_capture();
+                self.capture_timed_out();
             }
             other => return Some(other),
         };
@@ -1132,8 +1085,8 @@ impl Launcher {
             Message::VpnImportClicked => {
                 context.spawn_background(|_| {
                     let picked = filedialog::pick_open_file(
-                        &[(t!("OpenVPN 配置", "OpenVPN config"), "*.ovpn"), (t!("所有文件", "All files"), "*.*")],
-                        t!("选择 VPN 配置文件", "Select VPN config file"),
+                        &[(&t!("app.openvpn_config"), "*.ovpn"), (&t!("common.all_files"), "*.*")],
+                        &t!("app.select_vpn_config_file"),
                     );
                     Message::VpnConfigPicked(picked)
                 });
@@ -1150,7 +1103,7 @@ impl Launcher {
                 self.vpn.config_path = Some(path.display().to_string());
                 if let Err(e) = self.store.save_vpn(&self.vpn) {
                     self.dialog = Dialog::Error {
-                        message: tf!("保存 config.ini 失败：{}", "Failed to save config.ini: {}", e),
+                        message: t!("common.failed_to_save_config_ini", error = e).to_string(),
                     };
                 }
                 self.vpn_status = VpnStatus::Disconnected;
@@ -1188,18 +1141,14 @@ impl Launcher {
 
                     if self.vpn_auto_retries < VPN_AUTO_RETRIES {
                         self.dialog = Dialog::Error {
-                            message: tf!("自动重连失败（{}/{}）：{}\n将继续重试…",
-                                "Auto-reconnect failed ({}/{}): {}\nRetrying...",
-                                self.vpn_auto_retries, VPN_AUTO_RETRIES, err),
+                            message: t!("app.auto_reconnect_failed", attempt = self.vpn_auto_retries, max_attempts = VPN_AUTO_RETRIES, error = err).to_string(),
                         };
                         self.spawn_vpn_connect_task(context);
                     } else {
                         self.vpn_auto_retries = 0;
                         self.vpn_status = VpnStatus::Failed;
                         self.dialog = Dialog::Error {
-                            message: tf!("VPN 自动重连失败（已重试 {} 次）：{}\n请检查网络后手动重连",
-                                "VPN auto-reconnect failed after {} attempts: {}\nPlease reconnect manually",
-                                VPN_AUTO_RETRIES, err),
+                            message: t!("app.vpn_auto_reconnect_failed_after", max_attempts = VPN_AUTO_RETRIES, error = err).to_string(),
                         };
                     }
                 } else {
@@ -1221,17 +1170,14 @@ impl Launcher {
                     self.vpn_auto_retries += 1;
                     self.vpn_status = VpnStatus::Connecting;
                     self.dialog = Dialog::Error {
-                        message: tf!("VPN 已断开（{reason}），正在自动重连（{}/{}）…",
-                            "VPN disconnected ({reason}), reconnecting ({}/{})...",
-                            self.vpn_auto_retries, VPN_AUTO_RETRIES),
+                        message: t!("app.vpn_reconnecting", reason = reason, attempt = self.vpn_auto_retries, max_attempts = VPN_AUTO_RETRIES).to_string(),
                     };
                     self.spawn_vpn_connect_task(context);
                 } else {
                     self.vpn_auto_retries = 0;
                     self.vpn_status = VpnStatus::Failed;
                     self.dialog = Dialog::Error {
-                        message: tf!("VPN 已断开（{reason}），自动重连失败，请手动重连",
-                            "VPN disconnected ({reason}); auto-reconnect failed, please reconnect manually"),
+                        message: t!("app.vpn_reconnect_failed", reason = reason).to_string(),
                     };
                 }
             }
@@ -1251,7 +1197,7 @@ impl Launcher {
                 };
                 self.room_filter_idx = games_idx;
                 self.room_filter_game_id = games_idx.and_then(|i| {
-                    crate::db::games().get(i).map(|g| {
+                    crate::db::room_games().get(i).map(|g| {
                         g.game_id.clone().unwrap_or_else(|| g.name.clone())
                     })
                 });
@@ -1410,11 +1356,8 @@ impl Launcher {
                     self.launch_overlay = None;
                 }
 
-                let added_static_ip = rt.as_ref().and_then(|r| r.added_static_ip.clone());
-                if let Some((adapter, ip)) = added_static_ip {
-                    context.spawn_background(move |_| {
-                        Message::StaticIpRemoved(launch::remove_serverbox_static_ip(&adapter, &ip))
-                    });
+                if let Some(ip) = rt.as_ref().and_then(|r| r.static_ip.clone()) {
+                    context.spawn_background(move |_| Message::StaticIpRemoved(ip.remove()));
                 }
                 context.spawn_background(move |_| {
                     if let Some(r) = &rt {
@@ -1455,7 +1398,7 @@ impl Launcher {
         None
     }
 
-    const SAVE_SYSTEM: u32 = 1;
+    const SAVE_KEYCHIP: u32 = 1;
     const SAVE_NET: u32 = 1 << 1;
     const SAVE_INPUT: u32 = 1 << 2;
     const SAVE_VPN: u32 = 1 << 3;
@@ -1470,13 +1413,19 @@ impl Launcher {
         });
     }
 
+    /// Saves at once the changes still waiting for their debounce, for a step that needs
+    /// them on disk now (switching to another game's settings, launching a game).
+    pub(in crate::reactor_app) fn save_pending_now(&mut self) {
+        self.flush_pending_saves(self.save_debounce_gen);
+    }
+
     pub(in crate::reactor_app) fn flush_pending_saves(&mut self, token: u32) {
         if token != self.save_debounce_gen {
             return;
         }
         let pending = std::mem::replace(&mut self.pending_saves, 0);
-        if pending & Self::SAVE_SYSTEM != 0 {
-            self.save_system();
+        if pending & Self::SAVE_KEYCHIP != 0 {
+            self.save_keychip();
         }
         if pending & Self::SAVE_NET != 0 {
             self.save_net();
@@ -1487,7 +1436,7 @@ impl Launcher {
         if pending & Self::SAVE_VPN != 0 {
             if let Err(e) = self.store.save_vpn(&self.vpn) {
                 self.dialog = Dialog::Error {
-                    message: tf!("保存 config.ini 失败：{}", "Failed to save config.ini: {}", e),
+                    message: t!("common.failed_to_save_config_ini", error = e).to_string(),
                 };
             }
         }
@@ -1515,7 +1464,7 @@ impl Launcher {
                     .columns([GridLength::Star(1.0), GridLength::Auto])
                     .children((
                         TextBlock::new()
-                            .text(t!("Sasayaki 启动器", "Sasayaki Launcher"))
+                            .text(t!("common.app_name"))
                             .font_size(16.0)
                             .font_weight(FontWeight::SEMI_BOLD)
                             .vertical_alignment(VerticalAlignment::Center)
@@ -1533,13 +1482,13 @@ impl Launcher {
                                     .vertical_alignment(VerticalAlignment::Center)
                                     .children((
                                         TextBlock::new()
-                                            .text(t!("访问DNET网站", "Visit DNET website"))
+                                            .text(t!("app.visit_dnet_website"))
                                             .font_size(14.0)
                                             .vertical_alignment(VerticalAlignment::Center)
                                             .opacity(0.8),
                                         HyperlinkButton::new()
                                             .navigate_uri("https://dnet.arcadehub.xyz")
-                                            .expect("homepage uri 合法")
+                                            .expect("the homepage URI is valid")
                                             .content(
                                                 TextBlock::new()
                                                     .text("https://dnet.arcadehub.xyz")
@@ -1550,7 +1499,7 @@ impl Launcher {
                                 Button::new()
                                     .style(ButtonStyle::Accent)
                                     .on_click(context.message(Message::AddClicked))
-                                    .content(t!("＋ 添加游戏", "Add Game")),
+                                    .content(t!("app.add_game").to_string()),
                             )),
                     )),
             )
@@ -1597,29 +1546,29 @@ impl Launcher {
             if error {
                 (
                     Color::argb(255, 0xFF, 0x99, 0xA4),
-                    t!("更新错误", "Update error"),
+                    t!("app.update_error"),
                 )
             } else if checking {
                 (
                     Color::argb(255, 0xFF, 0xB0, 0x4D),
-                    t!("检查更新…", "Checking…"),
+                    t!("app.checking"),
                 )
             } else if outdated {
                 (
                     Color::argb(255, 0xFF, 0xB0, 0x4D),
-                    t!("有更新", "Update available"),
+                    t!("common.update_available"),
                 )
             } else if up_to_date {
 
                 (
                     Color::argb(255, 0x6C, 0xCB, 0x5F),
-                    t!("已最新", "Up to date"),
+                    t!("app.up_to_date"),
                 )
             } else {
 
                 (
                     Color::argb(255, 0x9E, 0x9E, 0x9E),
-                    t!("未检查", "Not checked"),
+                    t!("app.not_checked"),
                 )
             }
         };
@@ -1659,21 +1608,21 @@ impl Launcher {
                     .orientation(Orientation::Horizontal)
                     .spacing(20.0)
                     .children((
-                        item(t!("服务器", "Server"), srv_color),
+                        item(&t!("app.server"), srv_color),
                         item("VPN", vpn_color),
                         {
                             let (room_color, room_label) = match &self.room_status {
-                                RoomStatus::Idle => (Color::argb(255, 0x9E, 0x9E, 0x9E), t!("房间", "Room")),
+                                RoomStatus::Idle => (Color::argb(255, 0x9E, 0x9E, 0x9E), t!("app.room")),
                                 RoomStatus::Creating { .. } | RoomStatus::Joining { .. } => {
-                                    (Color::argb(255, 0x9E, 0x9E, 0x9E), t!("房间连接中…", "Room connecting…"))
+                                    (Color::argb(255, 0x9E, 0x9E, 0x9E), t!("app.room_connecting"))
                                 }
                                 RoomStatus::Hosting { .. } | RoomStatus::Joined { .. } => {
-                                    (Color::argb(255, 0x6C, 0xCB, 0x5F), t!("房间", "Room"))
+                                    (Color::argb(255, 0x6C, 0xCB, 0x5F), t!("app.room"))
                                 }
                             };
-                            item(room_label, room_color)
+                            item(&room_label, room_color)
                         },
-                        item(upd_label, upd_color),
+                        item(&upd_label, upd_color),
                     )),
             )
     }

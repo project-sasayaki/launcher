@@ -2,6 +2,8 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use rust_i18n::t;
+
 #[derive(Clone, Debug)]
 pub struct CardEntry {
     pub path: PathBuf,
@@ -97,6 +99,62 @@ pub fn scan_cards(game_file: &Path) -> CardScan {
     scan
 }
 
+// The reader writes three 69-byte tracks to a card, and KittenTools keeps all three in each card file.
+const CARD_TRACK_BYTES: u64 = 69;
+const WMMT3_CARD_BYTES: u64 = 3 * CARD_TRACK_BYTES;
+// A WMMT2 card holds its data on the first track only. Of the WMMT3 games, only WMMT3 itself reads
+// one, to take the player's data over; KittenTools reads the two missing tracks as blank.
+const WMMT2_CARD_BYTES: u64 = CARD_TRACK_BYTES;
+
+pub fn is_wmmt3_card_name(name: &str) -> bool {
+    let path = Path::new(name);
+    path.file_name().is_some_and(|file| file == name)
+        && path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("bin"))
+        && name.trim() == name
+        && !name.contains(';')
+        && !name.chars().any(char::is_control)
+}
+
+/// The card files in `dir`, including WMMT2 cards when `include_wmmt2_cards` is set.
+pub fn scan_wmmt3_cards_in(dir: &Path, include_wmmt2_cards: bool) -> CardScan {
+    let is_card_size = |bytes: u64| bytes == WMMT3_CARD_BYTES || (include_wmmt2_cards && bytes == WMMT2_CARD_BYTES);
+    let mut cards: Vec<_> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            if !is_wmmt3_card_name(&name) {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            (metadata.is_file() && is_card_size(metadata.len())).then(|| CardEntry {
+                path: entry.path(),
+                name,
+            })
+        })
+        .collect();
+    cards.sort_by(|a, b| a.name.cmp(&b.name));
+    CardScan { cards, active: None }
+}
+
+pub fn new_wmmt3_card_name_in(dir: &Path) -> String {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut name = format!("card_{stamp}.bin");
+    for suffix in 1.. {
+        if !dir.join(&name).exists() {
+            break;
+        }
+        name = format!("card_{stamp}_{suffix}.bin");
+    }
+    name
+}
+
 pub fn format_access_code(code: &str) -> String {
     let digits: Vec<char> = code.chars().collect();
     digits
@@ -160,7 +218,7 @@ pub fn create_aime_card_in(device_dir: &Path) -> std::io::Result<String> {
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        "无法生成不重复的 access code",
+        t!("cards.no_unique_access_code").to_string(),
     ))
 }
 
@@ -270,6 +328,41 @@ mod tests {
     }
 
     #[test]
+    fn wmmt3_scan_lists_track_files_and_keeps_the_extension() {
+        let dir = crate::file_util::test_dir::fresh("wmmt3_cards");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        let tracks = [0u8; WMMT3_CARD_BYTES as usize];
+        fs::write(dir.join("Player.BIN"), tracks).unwrap();
+        fs::write(dir.join("Player.BIN.png"), tracks).unwrap();
+        fs::write(dir.join("too-short.bin"), [0u8; 4]).unwrap();
+        fs::write(dir.join("nested").join("other.bin"), tracks).unwrap();
+
+        let mut scan = scan_wmmt3_cards_in(&dir, false);
+        assert_eq!(scan.cards.len(), 1);
+        assert_eq!(scan.cards[0].name, "Player.BIN");
+        scan.active = Some("player.bin".into());
+        assert_eq!(scan.active_index(), Some(0));
+        let blank = new_wmmt3_card_name_in(&dir);
+        assert!(is_wmmt3_card_name(&blank));
+        assert!(!dir.join(blank).exists(), "kitten writes the file after the game issues the card");
+        assert!(!is_wmmt3_card_name("nested/other.bin"));
+        crate::file_util::test_dir::remove(&dir);
+    }
+
+    #[test]
+    fn wmmt2_cards_are_listed_only_when_asked_for() {
+        let dir = crate::file_util::test_dir::fresh("wmmt2_cards");
+        fs::write(dir.join("wmmt3.bin"), [0u8; WMMT3_CARD_BYTES as usize]).unwrap();
+        fs::write(dir.join("wmmt2.bin"), [0u8; WMMT2_CARD_BYTES as usize]).unwrap();
+        fs::write(dir.join("two-tracks.bin"), [0u8; 2 * CARD_TRACK_BYTES as usize]).unwrap();
+
+        let names = |scan: CardScan| scan.cards.into_iter().map(|card| card.name).collect::<Vec<_>>();
+        assert_eq!(names(scan_wmmt3_cards_in(&dir, false)), ["wmmt3.bin"]);
+        assert_eq!(names(scan_wmmt3_cards_in(&dir, true)), ["wmmt2.bin", "wmmt3.bin"]);
+        crate::file_util::test_dir::remove(&dir);
+    }
+
+    #[test]
     fn access_code_formatting() {
         assert_eq!(
             format_access_code("12345678901234567890"),
@@ -284,19 +377,19 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dnet_aime_{}", std::process::id()));
         fs::remove_dir_all(&dir).ok();
 
-        let a = create_aime_card_in(&dir).expect("新建卡 a 应成功");
+        let a = create_aime_card_in(&dir).expect("creating card a should succeed");
         std::thread::sleep(std::time::Duration::from_millis(30));
-        let b = create_aime_card_in(&dir).expect("新建卡 b 应成功");
-        assert_ne!(a, b, "重号应自动重试");
+        let b = create_aime_card_in(&dir).expect("creating card b should succeed");
+        assert_ne!(a, b, "a duplicate number should be retried automatically");
         for code in [&a, &b] {
             assert_eq!(code.len(), 20);
             assert!(code.chars().all(|c| c.is_ascii_digit()));
-            assert!(code.starts_with('5'), "aime 惯例首位为 5");
+            assert!(code.starts_with('5'), "aime access codes start with 5 by convention");
         }
 
         let scan = scan_aime_cards_in(&dir);
         assert_eq!(scan.cards.len(), 2);
-        assert_eq!(scan.cards[0].name, b, "新建卡显示在最前面");
+        assert_eq!(scan.cards[0].name, b, "the new card comes first");
         assert_eq!(scan.cards[1].name, a);
 
         assert_eq!(
@@ -320,11 +413,11 @@ mod tests {
         fs::write(dir.join("short.txt"), "12345").unwrap();
 
         let scan = scan_aime_cards_in(&dir);
-        assert_eq!(scan.cards.len(), 2, "非 20 位数字的 txt 应被跳过");
+        assert_eq!(scan.cards.len(), 2, "a txt that is not 20 digits should be skipped");
         assert_eq!(scan.cards[1].name, code);
-        assert!(dir.join(format!("{code}.txt")).is_file(), "应改名为 <code>.txt");
-        assert!(!dir.join("random_name.txt").exists(), "旧文件名应已不存在");
-        assert!(dir.join("note.txt").is_file(), "不合规文件原样保留");
+        assert!(dir.join(format!("{code}.txt")).is_file(), "the file should be renamed to <code>.txt");
+        assert!(!dir.join("random_name.txt").exists(), "the old file name should be gone");
+        assert!(dir.join("note.txt").is_file(), "a file that does not qualify is left as it is");
         assert!(!scan.cards.iter().any(|c| c.name == "note"));
         assert_eq!(scan.cards[0].name, "51112222333344445555");
 

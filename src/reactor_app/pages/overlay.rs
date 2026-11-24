@@ -3,36 +3,17 @@ use std::sync::Arc;
 
 use windows_reactor::*;
 
-use crate::t;
+use rust_i18n::t;
 
 use crate::reactor_app::Launcher;
 use crate::reactor_app::message::Message;
+use crate::reactor_app::widgets::{builtin_cover_name, platform_name};
 
 const PANEL_COVER_W: f64 = 168.0;
 const PANEL_COVER_H: f64 = 112.0;
 
 const FALLBACK_WIN_W: f64 = 1180.0;
 const FALLBACK_WIN_H: f64 = 720.0;
-
-fn panel_cover_placeholder(name: &str) -> View {
-    let ch: String = name.chars().take(4).collect();
-    Border::new()
-        .width(PANEL_COVER_W)
-        .height(PANEL_COVER_H)
-        .corner_radius(8.0)
-        .background(ThemeBrush::CardStroke)
-        .content(
-            TextBlock::new()
-                .text(ch)
-                .font_size(24.0)
-                .font_weight(FontWeight::SEMI_BOLD)
-                .opacity(0.5)
-                .text_wrapping(TextWrapping::Wrap)
-                .horizontal_alignment(HorizontalAlignment::Center)
-                .vertical_alignment(VerticalAlignment::Center),
-        )
-        .into()
-}
 
 impl Launcher {
 
@@ -70,13 +51,11 @@ impl Launcher {
             }
             if rendered.is_none() {
 
-                let big_key = game
-                    .cover
-                    .as_deref()
-                    .map(|c| format!("{}_big.png", c.trim_end_matches(".png")));
+                let cover = builtin_cover_name(game);
+                let big_key = cover.as_deref().map(|c| format!("{}_big.png", c.trim_end_matches(".png")));
                 let bytes = big_key
                     .and_then(|k| Self::builtin_cover_bytes(&k))
-                    .or_else(|| game.cover.as_deref().and_then(Self::builtin_cover_bytes));
+                    .or_else(|| cover.as_deref().and_then(Self::builtin_cover_bytes));
                 if let Some(bytes) = bytes {
                     rendered = Some(
                         Image::new()
@@ -87,12 +66,12 @@ impl Launcher {
                     );
                 }
             }
-            rendered.unwrap_or_else(|| panel_cover_placeholder(&game.name))
+            rendered.unwrap_or_else(|| crate::reactor_app::widgets::fallback_cover(PANEL_COVER_W, PANEL_COVER_H))
         };
 
         let status_row: View = if running {
             TextBlock::new()
-                .text(t!("游戏运行中…", "Game running…"))
+                .text(t!("page_overlay.game_running"))
                 .font_size(14.0)
                 .opacity(0.65)
                 .horizontal_alignment(HorizontalAlignment::Center)
@@ -109,7 +88,7 @@ impl Launcher {
                         .width(18.0)
                         .height(18.0),
                     TextBlock::new()
-                        .text(t!("正在启动游戏…", "Starting game…"))
+                        .text(t!("page_overlay.starting_game"))
                         .font_size(14.0)
                         .opacity(0.65)
                         .vertical_alignment(VerticalAlignment::Center),
@@ -117,10 +96,7 @@ impl Launcher {
                 .into()
         };
 
-        let platform_label = game
-            .platform
-            .clone()
-            .unwrap_or_else(|| game.loader.platform().to_string());
+        let platform_label = platform_name(game);
         let title_row = StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(20.0)
@@ -152,7 +128,7 @@ impl Launcher {
             .min_height(36.0)
             .horizontal_alignment(HorizontalAlignment::Center)
             .on_click(context.message(Message::LaunchStop(index)))
-            .content(t!("关闭游戏", "Close game"));
+            .content(t!("page_overlay.close_game").to_string());
 
         let panel_fill = if self.light_theme {
             Color::argb(0xE8, 0xF3, 0xF3, 0xF3)

@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::mice;
-use crate::render_util::{bool_str, copy_tool_files, deadzone_value, nx_num, push_xi_button, Sections, split_resolution};
-use crate::tf;
+use rust_i18n::t;
+
+use super::mice;
+use super::render_util::{bool_str, copy_tool_files, deadzone_value, nx_num, push_xi_button, Sections, split_resolution};
 use crate::storage::{
     CoinConfig, DPAD_CODE_BASE, GameRecord, GraphicsConfig, InputConfig, INPUT_RATIO_DEFAULT,
     NetworkConfig, SystemConfig,
@@ -20,7 +21,8 @@ pub struct DeploySnapshot {
     pub game_id: Option<String>,
 }
 
-fn log_level_num(v: &str) -> Option<u32> {
+/// kitten's `[sysconf] log_level` for a launcher log level.
+pub fn log_level_num(v: &str) -> Option<u32> {
     match v.trim().to_ascii_lowercase().as_str() {
         "error" => Some(5),
         "warn" => Some(4),
@@ -185,13 +187,13 @@ pub fn render(dep: &DeploySnapshot) -> String {
         .unwrap_or(false)
     {
         if let Some(v) = dep.input.wheel_device.as_deref() {
-            s.push("dinput", "deviceName", v.trim());
+            s.push("dinput", "deviceName", v.trim_matches(|c: char| c.is_whitespace() || c.is_control()));
         }
         if let Some(v) = dep.input.pedal_device.as_deref() {
-            s.push("dinput", "pedalsName", v.trim());
+            s.push("dinput", "pedalsName", v.trim_matches(|c: char| c.is_whitespace() || c.is_control()));
         }
         if let Some(v) = dep.input.shifter_device.as_deref() {
-            s.push("dinput", "shifterName", v.trim());
+            s.push("dinput", "shifterName", v.trim_matches(|c: char| c.is_whitespace() || c.is_control()));
         }
         if let Some(n) = dep.input.start_button {
             s.push("dinput", "start", &n.to_string());
@@ -225,10 +227,10 @@ pub fn render(dep: &DeploySnapshot) -> String {
         }
 
         if let Some(ref n) = dep.input.throttle_axis {
-            s.push("dinput", "accelAxis", n);
+            s.push("dinput", "accelAxis", &n.trim().to_ascii_uppercase());
         }
         if let Some(ref n) = dep.input.brake_axis {
-            s.push("dinput", "brakeAxis", n);
+            s.push("dinput", "brakeAxis", &n.trim().to_ascii_uppercase());
         }
 
         s.push("dinput", "reverseAccelAxis", bool_str(dep.input.reverse_accel_axis.unwrap_or(false)));
@@ -248,27 +250,41 @@ pub fn render(dep: &DeploySnapshot) -> String {
 
 const EXCLUDE_FILES: &[&str] = &["config.ini", "sram.bin", "eeprom.bin"];
 
+/// kitten's config file in a game folder.
+pub fn config_path(game_dir: &Path) -> PathBuf {
+    game_dir.join("kitten").join("config.ini")
+}
+
+/// Copies kitten's files from `tool_dir` into the folder of the game file `game`; returns
+/// the kitten.exe there, which starts the game.
+pub fn install(tool_dir: &Path, game: &Path) -> Result<PathBuf, String> {
+    if !game.is_file() {
+        return Err(t!("common.game_file_does_not_exist", game = game.display()).to_string());
+    }
+    let Some(game_dir) = game.parent() else {
+        return Err(t!("kitten.cannot_determine_game_directory", game = game.display()).to_string());
+    };
+    if !game_dir.is_dir() {
+        return Err(t!("common.game_directory_does_not_exist", game_dir = game_dir.display()).to_string());
+    }
+    copy_tool_files(tool_dir, game_dir, EXCLUDE_FILES, "kitten")?;
+    Ok(game_dir.join("kitten.exe"))
+}
+
+/// Installs kitten for an Initial D game and writes its `kitten\config.ini` and the
+/// `mice\config.ini` its card reader reads.
 pub fn deploy(
     record: &GameRecord,
     tool_dir: &Path,
     dep: &DeploySnapshot,
 ) -> Result<PathBuf, String> {
     let game = Path::new(&record.path);
-    if !game.is_file() {
-        return Err(tf!("游戏文件不存在：{}", "Game file does not exist: {}", game.display()));
-    }
-    let Some(game_dir) = game.parent() else {
-        return Err(tf!("无法确定游戏目录：{}", "Cannot determine game directory: {}", game.display()));
-    };
-    if !game_dir.is_dir() {
-        return Err(tf!("游戏目录不存在：{}", "Game directory does not exist: {}", game_dir.display()));
-    }
-
-    copy_tool_files(tool_dir, game_dir, EXCLUDE_FILES, "kitten")?;
+    let kitten_exe = install(tool_dir, game)?;
+    let game_dir = kitten_exe.parent().unwrap_or(Path::new("."));
 
     let cfg_dir = game_dir.join("kitten");
     fs::create_dir_all(&cfg_dir)
-        .map_err(|e| tf!("创建 kitten 配置目录失败（{}）：{e}", "Failed to create kitten config directory ({}): {e}", cfg_dir.display()))?;
+        .map_err(|e| t!("kitten.failed_to_create_kitten_config", cfg_dir = cfg_dir.display(), error = e).to_string())?;
     write_config(&cfg_dir, dep)?;
 
     let mice_dep = mice::DeploySnapshot {
@@ -282,10 +298,10 @@ pub fn deploy(
     };
     let mice_dir = game_dir.join("mice");
     fs::create_dir_all(&mice_dir)
-        .map_err(|e| tf!("创建 mice 配置目录失败（{}）：{e}", "Failed to create mice config directory ({}): {e}", mice_dir.display()))?;
+        .map_err(|e| t!("kitten.failed_to_create_mice_config", mice_dir = mice_dir.display(), error = e).to_string())?;
     mice::write_atomic(&mice_dir.join("config.ini"), &mice::render_config(&mice_dep, mice::MiceTarget::Game))?;
 
-    Ok(game_dir.join("kitten.exe"))
+    Ok(kitten_exe)
 }
 
 fn write_config(cfg_dir: &Path, dep: &DeploySnapshot) -> Result<(), String> {
@@ -336,7 +352,7 @@ mod tests {
         GameRecord {
             id: "test".into(),
             path: game_dir.join("id5.elf").to_string_lossy().into_owned(),
-            name: "测试游戏".into(),
+            name: "Test game".into(),
             crc: Some("0x12345678".into()),
             version: Some("REV A".into()),
             arch: Some("x86".into()),
@@ -388,7 +404,7 @@ mod tests {
         let mut dep = snapshot();
         dep.system.loglevel = Some("off".into());
         let text = render(&dep);
-        assert!(!text.contains("log_level"), "历史遗留 off 不应写 log_level");
+        assert!(!text.contains("log_level"), "the legacy value off should not write log_level");
         assert!(text.contains("[network]"));
     }
 
@@ -431,7 +447,7 @@ mod tests {
         assert!(text.contains("simulateNetwork = false"));
         assert!(text.contains("log_level = 1"));
         assert!(text.contains("region = 2"));
-        assert!(text.contains("dipsw = 0x3A"), "CHN 应派生写 dipsw=0x3A");
+        assert!(text.contains("dipsw = 0x3A"), "CHN should also write dipsw=0x3A");
         assert!(text.contains("game_id = SBTS"));
         assert!(text.contains("keychip_serial = A69E-01A99999999"));
         assert!(text.contains("skipInitCard = true"));
@@ -444,26 +460,27 @@ mod tests {
         assert!(text.contains("mode = 2"));
         assert!(text.contains("restrict_ = 128"));
 
-        assert!(text.contains("[dinput]"), "dinput 模式应写 [dinput] 段");
+        assert!(text.contains("[dinput]"), "dinput mode should write the [dinput] section");
         assert!(text.contains("reverseAccelAxis = false"));
         assert!(text.contains("reverseBrakeAxis = false"));
-        assert!(!text.contains(';'), "生成文件不得含注释");
+        assert!(!text.contains(';'), "the generated file must not contain comments");
     }
 
     #[test]
     fn render_dinput_reverse_axes_true() {
         let mut dep = snapshot();
         dep.input.kind = Some("dinput".into());
-        dep.input.wheel_device = Some("Thrustmaster Wheel".into());
+        dep.input.wheel_device = Some("Thrustmaster Wheel\u{90}".into());
         dep.input.throttle_axis = Some("Y".into());
-        dep.input.brake_axis = Some("RZ".into());
+        dep.input.brake_axis = Some("Rz".into());
         dep.input.reverse_accel_axis = Some(true);
         dep.input.reverse_brake_axis = Some(true);
 
         let text = render(&dep);
 
         assert!(text.contains("[dinput]"));
-        assert!(text.contains("deviceName = Thrustmaster Wheel"));
+        assert!(text.contains("deviceName = Thrustmaster Wheel\n"));
+        assert!(!text.contains('\u{90}'));
         assert!(text.contains("accelAxis = Y"));
         assert!(text.contains("brakeAxis = RZ"));
         assert!(text.contains("reverseAccelAxis = true"));
@@ -476,7 +493,7 @@ mod tests {
         dep.input.kind = Some("dinput".into());
 
         let text = render(&dep);
-        assert!(text.contains("[ffb]"), "应写 [ffb] 力反馈段");
+        assert!(text.contains("[ffb]"), "the [ffb] force feedback section should be written");
         assert!(text.contains("enable = true"));
         assert!(text.contains("constantForceStrength = 100"));
         assert!(text.contains("damperStrength = 100"));
@@ -510,7 +527,7 @@ mod tests {
         let text = render(&dep);
         assert!(text.contains("region = 0"));
         assert!(text.contains("log_level = 3"));
-        assert!(!text.contains("dipsw"), "非 CHN 不写 dipsw");
+        assert!(!text.contains("dipsw"), "only CHN writes dipsw");
     }
 
     #[test]
@@ -533,7 +550,7 @@ mod tests {
         let text = render(&dep);
         assert!(text.contains("mode = 1"));
 
-        assert!(text.contains("restrict_ = 128"), "未设置比率应写默认 128");
+        assert!(text.contains("restrict_ = 128"), "without a ratio the default 128 should be written");
     }
 
     #[test]
@@ -559,11 +576,11 @@ mod tests {
         let text2 = render(&dep2);
         assert!(text2.contains("start = A"));
         assert!(text2.contains("coin = Y"));
-        assert!(text2.contains("accel = RT"), "油门源应写捕获的按钮名");
-        assert!(text2.contains("brake = LT"), "刹车源应写捕获的按钮名");
-        assert!(!text2.contains("viewChg ="), "未设置不写");
-        assert!(!text2.contains("up ="), "空白值不写出");
-        assert!(!text2.contains("card ="), "kitten [xinput] 无 card 键");
+        assert!(text2.contains("accel = RT"), "the throttle should be the captured button name");
+        assert!(text2.contains("brake = LT"), "the brake should be the captured button name");
+        assert!(!text2.contains("viewChg ="), "an unset key is not written");
+        assert!(!text2.contains("up ="), "a blank value is not written");
+        assert!(!text2.contains("card ="), "kitten [xinput] has no card key");
         assert!(!text2.contains("shiftDn ="));
         assert!(!text2.contains("down ="));
     }
@@ -589,8 +606,8 @@ mod tests {
         dep2.input.up_button = Some(DPAD_CODE_BASE + 1);
         dep2.input.left_button = Some(DPAD_CODE_BASE + 4);
         let text2 = render(&dep2);
-        assert!(!text2.contains("up = "), "十字键伪码不应写入 dinput");
-        assert!(!text2.contains("left = "), "十字键伪码不应写入 dinput");
+        assert!(!text2.contains("up = "), "D-pad pseudo codes should not be written to dinput");
+        assert!(!text2.contains("left = "), "D-pad pseudo codes should not be written to dinput");
     }
 
     #[test]
@@ -627,9 +644,9 @@ mod tests {
 
         assert_eq!(fs::read(game.join("kitten.exe")).unwrap(), b"kitten-bin");
         assert_eq!(fs::read(game.join("mice.dll")).unwrap(), b"dll-bin");
-        assert!(!game.join("config.ini").exists(), "不应复制工具自带 config.ini");
-        assert!(!game.join("kitten.log").exists(), "不应复制 *.log");
-        assert!(!game.join("sram.bin").exists(), "不应复制 sram.bin");
+        assert!(!game.join("config.ini").exists(), "the tool's own config.ini should not be copied");
+        assert!(!game.join("kitten.log").exists(), "*.log should not be copied");
+        assert!(!game.join("sram.bin").exists(), "sram.bin should not be copied");
 
         let cfg = fs::read_to_string(game.join("kitten/config.ini")).unwrap();
         assert_eq!(cfg, render(&dep));
@@ -658,7 +675,8 @@ mod tests {
 
         let rec = record_at(&game);
         let err = deploy(&rec, &tool, &snapshot()).unwrap_err();
-        assert!(err.contains("游戏文件不存在"), "{err}");
+        let expected = t!("common.game_file_does_not_exist", game = Path::new(&rec.path).display());
+        assert_eq!(err, expected);
     }
 
     #[test]
@@ -667,7 +685,7 @@ mod tests {
         snapshot.net.server = Some(" my.server.net ".into());
         let text = render(&snapshot);
         assert!(text.contains("redirect = my.server.net"));
-        assert!(!text.contains("sdgt.arcadehub.xyz"), "自定义服务器时不再写默认域名");
+        assert!(!text.contains("sdgt.arcadehub.xyz"), "with a custom server the default domain is not written");
     }
 
     #[test]
@@ -689,14 +707,14 @@ mod tests {
         let text = render(&dep);
         assert!(
             text.contains("bind_ip = 192.168.100.101"),
-            "应写出 [network] bind_ip：\n{text}"
+            "[network] bind_ip should be written:\n{text}"
         );
         assert!(
             text.contains("[network]")
                 && text.find("bind_ip = 192.168.100.101").unwrap() > text.find("[network]").unwrap(),
-            "bind_ip 必须位于 [network] 节内：\n{text}"
+            "bind_ip must be inside the [network] section:\n{text}"
         );
-        assert!(!text.contains("[serverbox]"), "不应出现独立的 [serverbox] 节");
+        assert!(!text.contains("[serverbox]"), "there should be no separate [serverbox] section");
     }
 
     #[test]
@@ -709,23 +727,23 @@ mod tests {
         dep.net.host_ip = Some("  192.168.100.50  ".into());
         assert!(
             !render(&dep).contains("game_ip"),
-            "模拟网络开启时不应写 game_ip"
+            "game_ip should not be written while the network is simulated"
         );
         dep.net.simulate = Some(true);
         assert!(
             !render(&dep).contains("game_ip"),
-            "模拟网络开启时不应写 game_ip"
+            "game_ip should not be written while the network is simulated"
         );
 
         dep.net.simulate = Some(false);
         let text = render(&dep);
         assert!(
             text.contains("game_ip = 192.168.100.50"),
-            "应写出 [network] game_ip：\n{text}"
+            "[network] game_ip should be written:\n{text}"
         );
         assert!(
             text.find("game_ip = 192.168.100.50").unwrap() > text.find("[network]").unwrap(),
-            "game_ip 必须位于 [network] 节内：\n{text}"
+            "game_ip must be inside the [network] section:\n{text}"
         );
     }
 }

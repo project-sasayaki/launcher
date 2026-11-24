@@ -4,9 +4,26 @@ pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
+use windows::Win32::Globalization::{CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS, MultiByteToWideChar};
 use windows::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
+
+/// Text a console program such as netsh wrote while its output was redirected: it is in
+/// the OEM code page (Shift-JIS on Japanese Windows, GBK on Chinese), not UTF-8.
+pub fn decode_oem(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    let flags = MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0);
+    let len = unsafe { MultiByteToWideChar(CP_OEMCP, flags, bytes, None) };
+    let Ok(len) = usize::try_from(len) else {
+        return String::from_utf8_lossy(bytes).into_owned();
+    };
+    let mut wide = vec![0u16; len];
+    unsafe { MultiByteToWideChar(CP_OEMCP, flags, bytes, Some(&mut wide)) };
+    String::from_utf16_lossy(&wide)
+}
 
 pub fn to_wide_null(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(iter::once(0)).collect()
@@ -164,5 +181,12 @@ mod tests {
         assert_eq!(unprotect_secret("plaintext"), "plaintext");
 
         assert_eq!(protect_secret(""), "");
+    }
+
+    #[test]
+    fn oem_text_decodes() {
+        // ASCII is the same in every OEM code page.
+        assert_eq!(decode_oem(b"Ok.\r\n"), "Ok.\r\n");
+        assert_eq!(decode_oem(b""), "");
     }
 }

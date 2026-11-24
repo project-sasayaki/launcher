@@ -1,5 +1,6 @@
 pub(super) mod cards;
 pub(super) mod dialog;
+pub(super) mod game_settings;
 pub(super) mod games;
 pub(super) mod graphics;
 pub(super) mod input;
@@ -9,3 +10,4 @@ pub(super) mod overlay;
 pub(super) mod room;
 pub(super) mod settings;
 pub(super) mod system;
+pub(super) mod wmmt3;

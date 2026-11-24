@@ -5,16 +5,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use windows_reactor::*;
 
 use crate::db;
+use crate::games::{family_of, Series};
 use crate::detect::{self, IdentifyResult};
 use crate::icf;
-use crate::t;
-use crate::tf;
-use crate::storage::{GameRecord, Loader};
+use rust_i18n::t;
+use crate::storage::GameRecord;
 
 use crate::reactor_app::Launcher;
 use crate::reactor_app::message::{CompanionKind, Dialog, IdentifyPayload, IcfPayload, Message, RowAction};
 use crate::reactor_app::state::PendingAdd;
-use crate::reactor_app::widgets::{make_id, now_secs, record_db_match, row_chip, row_placeholder, same_path, separator, settings_row, settings_row_sub, settings_toggle, spawn_anim_tick};
+use super::game_settings::SettingsTab;
+use crate::reactor_app::widgets::{builtin_cover_name, make_id, now_secs, platform_name, record_db_match, fallback_cover, row_chip, same_path, separator, settings_row, settings_row_sub, settings_toggle, spawn_anim_tick};
 
 pub(in crate::reactor_app) const ROW_COVER_W: f64 = 104.0;
 pub(in crate::reactor_app) const ROW_COVER_H: f64 = 68.0;
@@ -35,18 +36,50 @@ fn cover_file_exists(path: &str) -> bool {
     }
 }
 
+/// The library's games as the Games page lists them: by series, and within one by release
+/// date (see [`db::release_order`]); a game the database does not know comes last in its
+/// series, in the order it was added. Each game keeps its index in the library, which every
+/// row action uses: the library itself is never reordered.
+fn games_by_series(games: &[GameRecord]) -> Vec<(Series, Vec<(usize, &GameRecord)>)> {
+    let mut rows: Vec<(Series, Option<(&str, usize)>, usize, &GameRecord)> = games
+        .iter()
+        .enumerate()
+        .map(|(index, game)| (family_of(game).ui_features().series, db::release_order(game), index, game))
+        .collect();
+    // `None` (not in the database) sorts after every release; the index keeps the order added.
+    rows.sort_by_key(|(series, release, index, _)| (*series, release.is_none(), *release, *index));
+
+    rows.chunk_by(|a, b| a.0 == b.0)
+        .map(|group| (group[0].0, group.iter().map(|(_, _, index, game)| (*index, *game)).collect()))
+        .collect()
+}
+
+/// The heading of a series on the Games page.
+fn series_title(series: Series) -> String {
+    match series {
+        Series::InitialD => t!("page_games.series_initial_d"),
+        Series::WanganMidnight => t!("page_games.series_wangan_midnight"),
+    }
+    .to_string()
+}
+
 impl Launcher {
 
     pub(in crate::reactor_app) fn games_page(&self, context: &mut ViewContext<Self>) -> View {
-        let rows: Vec<KeyedView> = self
-            .library
-            .games
-            .iter()
-            .enumerate()
-            .map(|(i, g)| self.game_row(context, i, g))
-            .collect();
+        let mut rows: Vec<KeyedView> = Vec::new();
+        for (series, games) in games_by_series(&self.library.games) {
+            rows.push(KeyedView::new(
+                format!("series-{series:?}"),
+                TextBlock::new()
+                    .text(series_title(series))
+                    .font_size(16.0)
+                    .font_weight(FontWeight::SEMI_BOLD)
+                    .margin(Thickness::new(0.0, 12.0, 0.0, 2.0)),
+            ));
+            rows.extend(games.into_iter().map(|(i, g)| self.game_row(context, i, g)));
+        }
 
-        let subtitle = tf!("{} 款游戏", "{} games", self.library.games.len());
+        let subtitle = t!("page_games.game_count", games = self.library.games.len()).to_string();
 
         let games_view: View = if rows.is_empty() {
 
@@ -57,14 +90,11 @@ impl Launcher {
                 .vertical_alignment(VerticalAlignment::Center)
                 .children((
                     TextBlock::new()
-                        .text(t!("还没有添加游戏", "No games added yet"))
+                        .text(t!("page_games.no_games_added_yet"))
                         .font_size(20.0)
                         .font_weight(FontWeight::SEMI_BOLD),
                     TextBlock::new()
-                        .text(t!(
-                            "点击右上角「添加游戏」，选择游戏文件（.exe / .elf）",
-                            "Click \"Add Game\" at top right and pick a game file (.exe / .elf)",
-                        ))
+                        .text(t!("page_games.click_add_game_at_top"))
                         .opacity(0.6)
                         .text_wrapping(TextWrapping::Wrap)
                         .horizontal_alignment(HorizontalAlignment::Center),
@@ -84,7 +114,7 @@ impl Launcher {
                                 .spacing(4.0)
                                 .children((
                                     TextBlock::new()
-                                        .text(t!("游戏", "Games"))
+                                        .text(t!("nav.games"))
                                         .font_size(26.0)
                                         .font_weight(FontWeight::SEMI_BOLD),
                                     TextBlock::new().text(subtitle).font_size(12.0).opacity(0.6),
@@ -124,7 +154,7 @@ impl Launcher {
                 }
             }
             if rendered.is_none() {
-                if let Some(bytes) = game.cover.as_deref().and_then(Self::builtin_cover_bytes) {
+                if let Some(bytes) = builtin_cover_name(game).as_deref().and_then(Self::builtin_cover_bytes) {
                     rendered = Some(
                         Image::new()
                             .source_data(EncodedImage::new(Arc::<[u8]>::from(bytes)))
@@ -135,16 +165,16 @@ impl Launcher {
                     );
                 }
             }
-            rendered.unwrap_or_else(|| row_placeholder(&game.name).into())
+            rendered.unwrap_or_else(|| fallback_cover(ROW_COVER_W, ROW_COVER_H))
         };
 
         let mut parts: Vec<String> = Vec::new();
-        parts.push(game.version.as_deref().unwrap_or(t!("未识别版本", "Unidentified")).to_string());
+        parts.push(game.version.as_deref().unwrap_or(&t!("page_games.unidentified")).to_string());
         if let Some(id) = record_db_match(game).and_then(|m| m.game_id) {
             parts.push(id);
         }
         if game.serverbox.is_some() {
-            parts.push(t!("ServerBox 已配置", "ServerBox configured").to_string());
+            parts.push(t!("page_games.serverbox_configured").to_string());
         }
         let sub = parts.join(" · ");
 
@@ -159,10 +189,7 @@ impl Launcher {
             "\u{E76C}"
         });
 
-        let platform_label = game
-            .platform
-            .clone()
-            .unwrap_or_else(|| game.loader.platform().to_string());
+        let platform_label = platform_name(game);
         let right: View = StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(8.0)
@@ -210,6 +237,7 @@ impl Launcher {
             };
 
             let sb_supported = record_db_match(game).and_then(|m| m.sb_crc).is_some();
+            let features = crate::games::family_of(game).ui_features();
 
             let game_running_here = self.game_running
                 && self.game_runtime.as_ref().map(|r| r.index) == Some(index);
@@ -219,22 +247,20 @@ impl Launcher {
                 .map(|r| r.index)
                 == Some(index);
 
-            let cards_desc = match game.card.clone().or_else(|| self.store.load_card()) {
+            let cards_desc = match self.selected_card(game) {
                 Some(c) => {
-                    let file = if game.loader == Loader::Segatools {
-                        if c.ends_with(".txt") {
-                            c
-                        } else {
-                            format!("{c}.txt")
-                        }
-                    } else if c.ends_with(".png") {
+                    let extension = features.card_extension;
+                    let has_extension = Path::new(&c)
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case(extension));
+                    let file = if has_extension {
                         c
                     } else {
-                        format!("{c}.png")
+                        format!("{c}.{extension}")
                     };
-                    tf!("当前卡片：{}", "Current card: {}", file)
+                    t!("page_games.current_card", file = file).to_string()
                 }
-                None => t!("未选择", "Not selected").to_string(),
+                None => t!("page_games.not_selected").to_string(),
             };
 
             let mut rows: Vec<KeyedView> = vec![
@@ -242,22 +268,22 @@ impl Launcher {
                     "drop-launch",
                     settings_row(
                         SymbolIcon::new().symbol(Symbol::Play).into(),
-                        t!("启动游戏", "Launch game"),
+                        &t!("common.launch_game"),
 
                         if game_running_here {
                             Button::new()
                                 .style(ButtonStyle::Accent)
                                 .on_click(context.message(Message::LaunchStop(index)))
-                                .content(t!("关闭", "Close"))
+                                .content(t!("common.close").to_string())
                                 .into()
-                        } else if game.loader == Loader::Segatools {
+                        } else if !features.test_mode {
                             Button::new()
                                 .style(ButtonStyle::Accent)
                                 .on_click(context.message(Message::RowMenu {
                                     index,
                                     action: RowAction::Launch,
                                 }))
-                                .content(t!("启动", "Launch"))
+                                .content(t!("page_games.launch").to_string())
                                 .into()
                         } else {
                             StackPanel::new()
@@ -272,62 +298,81 @@ impl Launcher {
                                         ))
                                         .vertical_alignment(VerticalAlignment::Center)
 
-                                        .content(t!("测试模式", "Test mode")),
+                                        .content(t!("page_games.test_mode").to_string()),
                                     Button::new()
                                         .style(ButtonStyle::Accent)
                                         .on_click(context.message(Message::RowMenu {
                                             index,
                                             action: RowAction::Launch,
                                         }))
-                                        .content(t!("启动", "Launch")),
+                                        .content(t!("page_games.launch").to_string()),
                                 ))
                                 .into()
                         },
                     ),
                 ),
+            ];
 
-                KeyedView::new("drop-sep-cards", separator()),
-                KeyedView::new(
+            rows.push(KeyedView::new("drop-sep-settings", separator()));
+            rows.push(KeyedView::new(
+                "drop-settings",
+                settings_row(
+                    SymbolIcon::new().symbol(Symbol::Setting).into(),
+                    &t!("page_games.game_settings"),
+                    Button::new()
+                        .on_click(context.message(Message::RowMenu {
+                            index,
+                            action: RowAction::GameSettings,
+                        }))
+                        .content(t!("page_games.enter").to_string())
+                        .into(),
+                ),
+            ));
+
+            if features.cards {
+                rows.push(KeyedView::new("drop-sep-cards", separator()));
+                rows.push(KeyedView::new(
                     "drop-cards",
-
                     settings_row_sub(
                         SymbolIcon::new().symbol(Symbol::List).into(),
-                        t!("卡片选择", "Card select"),
+                        &t!("common.card_select"),
                         Some(cards_desc),
                         Button::new()
                             .on_click(context.message(Message::RowMenu {
                                 index,
                                 action: RowAction::Cards,
                             }))
-                            .content(t!("进入", "Enter")),
+                            .content(t!("page_games.enter").to_string()),
                     ),
-                ),
-            ];
+                ));
+            }
 
-            let region_items: Vec<String> = GAME_REGIONS.iter().map(|v| v.to_string()).collect();
-            let region_idx = GAME_REGIONS
-                .iter()
-                .position(|v| Some(*v) == game.region.as_deref());
-            rows.push(KeyedView::new("drop-sep-region", separator()));
-            rows.push(KeyedView::new(
-                "drop-region",
-                settings_row(
-                    SymbolIcon::new().symbol(Symbol::World).into(),
-                    "Region",
-                    ComboBox::new()
-                        .width(180.0)
-                        .items_source(region_items)
-                        .selected_index(region_idx)
-                        .placeholder_text(t!("选择地区", "Select region"))
-                        .on_selection_changed(
-                            context.callback(move |i| Message::GameRegionSelected(index, i)),
-                        )
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .into(),
-                ),
-            ));
+            if features.region {
+                let region_items: Vec<String> = GAME_REGIONS.iter().map(|v| v.to_string()).collect();
+                let region_idx = GAME_REGIONS
+                    .iter()
+                    .position(|v| Some(*v) == game.region.as_deref());
+                rows.push(KeyedView::new("drop-sep-region", separator()));
+                rows.push(KeyedView::new(
+                    "drop-region",
+                    settings_row(
+                        SymbolIcon::new().symbol(Symbol::World).into(),
+                        "Region",
+                        ComboBox::new()
+                            .width(180.0)
+                            .items_source(region_items)
+                            .selected_index(region_idx)
+                            .placeholder_text(t!("page_games.select_region"))
+                            .on_selection_changed(
+                                context.callback(move |i| Message::GameRegionSelected(index, i)),
+                            )
+                            .vertical_alignment(VerticalAlignment::Center)
+                            .into(),
+                    ),
+                ));
+            }
 
-                if game.loader == Loader::Mice {
+                if features.graphics_patch {
                     rows.insert(1, KeyedView::new("drop-sep-gfx", separator()));
                     rows.insert(
                         2,
@@ -335,7 +380,7 @@ impl Launcher {
                             "drop-gfx",
                             settings_row(
                             SymbolIcon::new().symbol(Symbol::Repair).into(),
-                            t!("图形补丁", "Graphics patch"),
+                            &t!("page_games.graphics_patch"),
                             settings_toggle(
                                 game.gfx_patch.unwrap_or(true),
                                 true,
@@ -350,16 +395,16 @@ impl Launcher {
                 let sb_desc = game
                     .serverbox
                     .as_deref()
-                    .map(|p| tf!("已配置：{}", "Configured: {}", file_name(p)))
+                    .map(|p| t!("page_games.configured", file_name = file_name(p)).to_string())
                     .unwrap_or_else(|| {
-                        t!("未配置：点击添加（需匹配该构建的 ServerBox CRC）", "Not configured: click Add (must match this build's ServerBox CRC)").to_string()
+                        t!("page_games.serverbox_not_configured").to_string()
                     });
                 let sb_control: View = if sb_running_here {
 
                     Button::new()
                         .style(ButtonStyle::Accent)
                         .on_click(context.message(Message::ServerBoxStop(index)))
-                        .content(t!("关闭", "Close"))
+                        .content(t!("common.close").to_string())
                         .into()
                 } else if game.serverbox.is_some() {
                     StackPanel::new()
@@ -372,19 +417,19 @@ impl Launcher {
                                     index,
                                     action: RowAction::LaunchServerBox,
                                 }))
-                                .content(t!("启动", "Launch")),
+                                .content(t!("page_games.launch").to_string()),
                             Button::new()
                                 .on_click(context.message(Message::RowMenu {
                                     index,
                                     action: RowAction::AddServerBox,
                                 }))
-                                .content(t!("更换", "Replace")),
+                                .content(t!("page_games.replace").to_string()),
                             Button::new()
                                 .on_click(context.message(Message::RowMenu {
                                     index,
                                     action: RowAction::RemoveServerBox,
                                 }))
-                                .content(t!("移除", "Remove")),
+                                .content(t!("common.remove").to_string()),
                         ))
                         .into()
                 } else {
@@ -393,7 +438,7 @@ impl Launcher {
                             index,
                             action: RowAction::AddServerBox,
                         }))
-                        .content(t!("添加", "Add"))
+                        .content(t!("common.add").to_string())
                 };
                 rows.push(KeyedView::new("drop-sep-sb", separator()));
                 rows.push(KeyedView::new(
@@ -408,7 +453,7 @@ impl Launcher {
                 ));
             }
 
-            if game.loader == Loader::Segatools {
+            if features.companion_executables {
                 let companion_row = |key: &str,
                                      title: String,
                                      configured: Option<&String>,
@@ -417,10 +462,9 @@ impl Launcher {
                  -> (KeyedView, KeyedView) {
                     let desc = configured
                         .as_deref()
-                        .map(|p| tf!("已记录：{}", "Saved: {}", file_name(p)))
+                        .map(|p| t!("page_games.saved", file_name = file_name(p)).to_string())
                         .unwrap_or_else(|| {
-                            t!("未配置：点击添加并指定文件路径",
-                               "Not configured: click Add and pick the file").to_string()
+                            t!("page_games.file_not_configured").to_string()
                         });
                     let control: View = if configured.is_some() {
                         StackPanel::new()
@@ -429,16 +473,16 @@ impl Launcher {
                             .children((
                                 Button::new()
                                     .on_click(context.message(Message::RowMenu { index, action: add }))
-                                    .content(t!("更换", "Replace")),
+                                    .content(t!("page_games.replace").to_string()),
                                 Button::new()
                                     .on_click(context.message(Message::RowMenu { index, action: remove }))
-                                    .content(t!("移除", "Remove")),
+                                    .content(t!("common.remove").to_string()),
                             ))
                             .into()
                     } else {
                         Button::new()
                             .on_click(context.message(Message::RowMenu { index, action: add }))
-                            .content(t!("添加", "Add"))
+                            .content(t!("common.add").to_string())
                     };
 
                     let control: View = StackPanel::new()
@@ -477,7 +521,7 @@ impl Launcher {
                 rows.push(row1);
                 let (sep2, row2) = companion_row(
                     "gameexe",
-                    t!("游戏主程序", "Game executable").to_string(),
+                    t!("page_games.game_executable").to_string(),
                     game.game_exe.as_ref(),
                     RowAction::AddGameExe,
                     RowAction::RemoveGameExe,
@@ -491,10 +535,10 @@ impl Launcher {
                 "drop-remove",
                 settings_row(
                     FontIcon::new().glyph("\u{E74D}").into(),
-                    t!("移除游戏", "Remove game"),
+                    &t!("page_games.remove_game"),
                     Button::new()
                         .on_click(context.message(Message::GameRemoveClicked(index)))
-                        .content(t!("移除", "Remove")),
+                        .content(t!("common.remove").to_string()),
                 ),
             ));
 
@@ -548,7 +592,7 @@ impl Launcher {
     pub(in crate::reactor_app) fn handle_file_picked(&mut self, path: PathBuf, context: &ComponentContext<Self>) {
         if self.library.games.iter().any(|g| same_path(&g.path, &path)) {
             self.dialog = Dialog::Error {
-                message: t!("该游戏已在库中", "This game is already in the library").to_string(),
+                message: t!("page_games.this_game_is_already_in").to_string(),
             };
             return;
         }
@@ -564,11 +608,7 @@ impl Launcher {
                     .and_then(|info| {
                         match db::lookup_by_game_id(&info.id, &info.version) {
                             Some(m) => Ok((info, m)),
-                            None => Err(tf!(
-                                "识别库中未找到 id={}、version={} 的条目",
-                                "No library entry found for ICF id={}, version={}",
-                                info.id, info.version
-                            )),
+                            None => Err(t!("page_games.no_library_entry_found_for", id = info.id, version = info.version).to_string()),
                         }
                     });
                 Message::IcfIdentified(Box::new(IcfPayload { path, result }))
@@ -579,14 +619,23 @@ impl Launcher {
         });
     }
 
+    /// Adds a game to the library. A game added while `config.ini` still holds the settings
+    /// it kept for every game gets them in a file of its own.
+    pub(in crate::reactor_app) fn add_game(&mut self, game: GameRecord) {
+        self.library.games.push(game);
+        self.store.save_library(&self.library);
+        let moved = self.store.move_shared_settings(&self.library.games);
+        self.report_moved_settings(moved);
+    }
+
     pub(in crate::reactor_app) fn handle_identified(&mut self, payload: IdentifyPayload) {
         let IdentifyPayload { path, result } = payload;
         match result {
-            Err(e) => self.dialog = Dialog::Error { message: tf!("识别失败：{}", "Identification failed: {}", e) },
+            Err(e) => self.dialog = Dialog::Error { message: t!("page_games.identification_failed", error = e).to_string() },
             Ok(ir) => {
                 if let Some(d) = &ir.db {
 
-                    self.library.games.push(GameRecord {
+                    self.add_game(GameRecord {
                         id: make_id(),
                         path: path.display().to_string(),
                         name: d.name.clone(),
@@ -610,7 +659,6 @@ impl Launcher {
                         last_played: None,
                         added_at: now_secs(),
                     });
-                    self.store.save_library(&self.library);
                 } else {
 
                     let default = path
@@ -627,10 +675,10 @@ impl Launcher {
     pub(in crate::reactor_app) fn handle_icf_identified(&mut self, payload: IcfPayload) {
         let IcfPayload { path, result } = payload;
         match result {
-            Err(e) => self.dialog = Dialog::Error { message: tf!("识别失败：{}", "Identification failed: {}", e) },
+            Err(e) => self.dialog = Dialog::Error { message: t!("page_games.identification_failed", error = e).to_string() },
             Ok((_info, m)) => {
 
-                self.library.games.push(GameRecord {
+                self.add_game(GameRecord {
                     id: make_id(),
                     path: path.display().to_string(),
                     name: m.name.clone(),
@@ -654,7 +702,6 @@ impl Launcher {
                     last_played: None,
                     added_at: now_secs(),
                 });
-                self.store.save_library(&self.library);
             }
         }
     }
@@ -709,6 +756,7 @@ impl Launcher {
                 self.dialog = Dialog::None;
                 self.enter_cards(index, context);
             }
+            RowAction::GameSettings => self.open_game_settings(index, SettingsTab::default(), context),
             RowAction::AddServerBox => {
                 self.pick_companion(context, CompanionKind::ServerBox, index);
             }
@@ -787,8 +835,7 @@ impl Launcher {
                 if let (Some(gd), Some(sd)) = (Path::new(&game.path).parent(), path.parent()) {
                     if same_path(&gd.to_string_lossy(), sd) {
                         self.dialog = Dialog::Error {
-                            message: t!("ServerBox 不能与游戏位于同一目录",
-                               "ServerBox cannot be in the same directory as the game")
+                            message: t!("page_games.serverbox_cannot_be_in_same")
                                 .to_string(),
                         };
                         return;
@@ -798,12 +845,12 @@ impl Launcher {
                 match record_db_match(game).and_then(|m| m.sb_crc) {
                     None => {
                         self.dialog = Dialog::Error {
-                            message: t!("该游戏当前命中版本未提供 ServerBox 信息", "The currently matched version of this game provides no ServerBox info").to_string()
+                            message: t!("page_games.currently_matched_version_of_this").to_string()
                         }
                     }
                     Some(expected) => match result {
                         Err(e) => self.dialog = Dialog::Error {
-                            message: tf!("ServerBox 识别失败：{}", "ServerBox identification failed: {}", e),
+                            message: t!("page_games.serverbox_identification_failed", error = e).to_string(),
                         },
                         Ok(ir) if ir.crc == expected => {
                             self.library.games[index].serverbox =
@@ -812,10 +859,7 @@ impl Launcher {
                         }
                         Ok(ir) => {
                             self.dialog = Dialog::Error {
-                                message: tf!("所选文件不是该游戏的 ServerBox（CRC 0x{:08x}，期望 0x{expected:08x}）",
-                                   "The selected file is not this game's ServerBox (CRC 0x{:08x}, expected 0x{expected:08x})",
-                                ir.crc
-                            )
+                                message: t!("page_games.selected_file_is_not_this", crc = ir.crc : {:08x}, expected = expected : {:08x}).to_string()
                             }
                         }
                     },
@@ -826,4 +870,69 @@ impl Launcher {
         }
     }
 
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+    use crate::games::test_input::record;
+    use crate::storage::Loader;
+
+    /// A game added from its executable, which the database knows by `crc`.
+    fn by_crc(loader: Loader, crc: &str) -> GameRecord {
+        GameRecord { crc: Some(crc.into()), ..record(loader, None) }
+    }
+
+    /// A WMMT3 game added from its `main`; the library records the game id the database gave it.
+    fn wmmt3(crc: &str, game_id: &str) -> GameRecord {
+        GameRecord { crc: Some(crc.into()), ..record(Loader::Kitten, Some(game_id)) }
+    }
+
+    /// The library indices of the games, series by series.
+    fn order(games: &[GameRecord]) -> Vec<(Series, Vec<usize>)> {
+        games_by_series(games)
+            .into_iter()
+            .map(|(series, members)| (series, members.into_iter().map(|(i, _)| i).collect()))
+            .collect()
+    }
+
+    #[test]
+    fn games_are_listed_by_series_then_release_date() {
+        let games = vec![
+            wmmt3("0x85a0e7ab", "W3P"),           // 0: Maximum Tune 3DX+ JPN, 2010
+            by_crc(Loader::Kitten, "0xda04e5e0"), // 1: Arcade Stage 5 JPN, 2009
+            wmmt3("0xcf5dde93", "WM3"),           // 2: Maximum Tune 3 JPN, 2007
+            by_crc(Loader::Mice, "0x1fd6136a"),   // 3: Arcade Stage 8 JPN, 2014
+            wmmt3("0xfa4b36bc", "W3X"),           // 4: Maximum Tune 3DX JPN, 2008
+            by_crc(Loader::Kitten, "0x361d1cbe"), // 5: Arcade Stage 4 JPN, 2007
+        ];
+        assert_eq!(order(&games), [(Series::InitialD, vec![5, 1, 3]), (Series::WanganMidnight, vec![2, 4, 0])]);
+    }
+
+    #[test]
+    fn versions_out_the_same_day_follow_the_database_jpn_exp_chn() {
+        let games = vec![
+            wmmt3("0x4753d367", "W3P"), // 3DX+ CHN
+            wmmt3("0x827c956b", "W3P"), // 3DX+ EXP
+            wmmt3("0x85a0e7ab", "W3P"), // 3DX+ JPN
+        ];
+        assert_eq!(order(&games), [(Series::WanganMidnight, vec![2, 1, 0])]);
+    }
+
+    #[test]
+    fn a_game_added_from_its_icf_is_placed_by_game_id_and_version() {
+        let mut season_2 = record(Loader::Segatools, Some("SDGT"));
+        season_2.version = Some("1.70.00".into());
+        let kai = by_crc(Loader::Kitten, "0x6cb19701"); // Arcade Stage 4 kai, 2008
+        assert_eq!(order(&[season_2, kai]), [(Series::InitialD, vec![1, 0])]);
+    }
+
+    #[test]
+    fn unknown_games_come_last_in_their_series_in_the_order_added() {
+        let mut unknown_a = record(Loader::Kitten, None);
+        unknown_a.version = None;
+        let unknown_b = unknown_a.clone();
+        let games = vec![unknown_a, by_crc(Loader::Kitten, "0xda04e5e0"), unknown_b];
+        assert_eq!(order(&games), [(Series::InitialD, vec![1, 0, 2])]);
+    }
 }

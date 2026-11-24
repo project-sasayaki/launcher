@@ -8,8 +8,7 @@ use windows_reactor::*;
 
 use crate::awl::{AwlManager, RoomStatus};
 use crate::roomdir::RoomDirClient;
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 use crate::reactor_app::Launcher;
 use crate::reactor_app::message::{Dialog, Message};
@@ -39,14 +38,14 @@ impl Launcher {
 
     pub(in crate::reactor_app) fn room_net_override(
         &self,
-    ) -> Option<crate::mice::RoomNetOverride> {
+    ) -> Option<crate::loaders::mice::RoomNetOverride> {
         match &self.room_status {
-            RoomStatus::Hosting { .. } => Some(crate::mice::RoomNetOverride {
+            RoomStatus::Hosting { .. } => Some(crate::loaders::mice::RoomNetOverride {
                 cidr: crate::awl::ROOM_CIDR.to_string(),
                 my_game_ip: None,
                 server_ip: crate::awl::HOST_SERVERBOX_IP.to_string(),
             }),
-            RoomStatus::Joined { .. } => Some(crate::mice::RoomNetOverride {
+            RoomStatus::Joined { .. } => Some(crate::loaders::mice::RoomNetOverride {
                 cidr: crate::awl::ROOM_CIDR.to_string(),
                 my_game_ip: self.room_my_ip.clone(),
                 server_ip: crate::awl::HOST_SERVERBOX_IP.to_string(),
@@ -156,11 +155,7 @@ impl Launcher {
         let Some(index) = self.room_game_index() else {
             let game = self.room_game.clone();
             self.dialog = Dialog::Error {
-                message: tf!(
-                    "尚未添加游戏「{0}」，已跳转游戏页，添加后即可启动",
-                    "Game \"{0}\" is not in the library; open the Games page and add it to launch",
-                    game
-                ),
+                message: t!("page_room.game_is_not_in_library", game = game).to_string(),
             };
             self.nav_tag = "games".to_string();
             return;
@@ -174,10 +169,7 @@ impl Launcher {
                 .is_none()
             {
                 self.dialog = Dialog::Error {
-                    message: t!(
-                        "该游戏未配置 ServerBox，已跳转游戏页",
-                        "ServerBox is not configured for this game; opening the Games page"
-                    )
+                    message: t!("page_room.serverbox_is_not_configured_for")
                     .to_string(),
                 };
                 self.nav_tag = "games".to_string();
@@ -196,7 +188,7 @@ impl Launcher {
     ) {
         let overlay = with_overlay;
         if overlay {
-            self.room_overlay = Some(t!("正在刷新房间列表…", "Refreshing room list…").to_string());
+            self.room_overlay = Some(t!("page_room.refreshing_room_list").to_string());
         }
         let dir = self.dir_client();
         let filter = self.room_filter_game_id.clone();
@@ -240,27 +232,24 @@ impl Launcher {
         let name = name.trim().to_string();
         let Some(game_idx) = game_idx else {
             self.dialog = Dialog::Error {
-                message: t!("请选择游戏", "Select a game").to_string(),
+                message: t!("page_room.select_game").to_string(),
             };
             return;
         };
-        let games = crate::db::games();
+        let games = crate::db::room_games();
         let Some(entry) = games.get(game_idx) else {
             self.dialog = Dialog::Error {
-                message: t!("所选游戏不存在", "Selected game does not exist").to_string(),
+                message: t!("page_room.selected_game_does_not_exist").to_string(),
             };
             return;
         };
 
         let game_id = entry.game_id.clone().unwrap_or_else(|| entry.name.clone());
         let game = entry.name.clone();
-        let keychip = self.system.keychip.clone().unwrap_or_default();
+        let keychip = self.keychip.clone().unwrap_or_default();
         if keychip.trim().is_empty() {
             self.dialog = Dialog::Error {
-                message: t!(
-                    "未配置 Keychip 序列号，请先在「系统设置」页填写",
-                    "Keychip serial is not configured; fill it in on the System page first"
-                ).to_string(),
+                message: t!("page_room.keychip_serial_is_not_configured").to_string(),
             };
             return;
         }
@@ -269,9 +258,9 @@ impl Launcher {
         self.room.last_room_password = None;
         let _ = self.store.save_room(&self.room);
         let overlay_text = if name.is_empty() {
-            t!("正在创建房间…", "Creating room…").to_string()
+            t!("page_room.creating_room").to_string()
         } else {
-            tf!("正在创建房间「{0}」…", "Creating room \"{0}\"…", name)
+            t!("page_room.creating_named_room", name = name).to_string()
         };
         self.room_overlay = Some(overlay_text);
         self.room_status = RoomStatus::Creating { name: name.clone() };
@@ -399,14 +388,14 @@ impl Launcher {
         let room_id = room_id.trim().to_uppercase();
         if room_id.is_empty() {
             self.dialog = Dialog::Error {
-                message: t!("请填写房间 ID", "Enter a room ID").to_string(),
+                message: t!("page_room.enter_room_id").to_string(),
             };
             return;
         }
         self.room.last_room_password = Some(password.clone());
 
         self.room_join_password = password.clone();
-        self.room_overlay = Some(t!("正在加入房间…", "Joining room…").to_string());
+        self.room_overlay = Some(t!("page_room.joining_room").to_string());
         self.room_status = RoomStatus::Joining { room_id: room_id.clone() };
         let cfg = self.room.clone();
         let dir = self.dir_client();
@@ -510,9 +499,9 @@ impl Launcher {
         let _ = self.store.save_room(&self.room);
 
         self.room_overlay = Some(if is_host {
-            t!("正在关闭房间…", "Closing room…").to_string()
+            t!("page_room.closing_room").to_string()
         } else {
-            t!("正在退出房间…", "Leaving room…").to_string()
+            t!("page_room.leaving_room").to_string()
         });
         let handle = self.room_handle.lock().unwrap().take();
         let dir = self.dir_client();
@@ -524,22 +513,21 @@ impl Launcher {
 
             let friendly = |e: String| {
                 if e == "HTTP 404" {
-                    t!("房间已关闭", "The room has been closed").to_string()
+                    t!("page_room.room_has_been_closed").to_string()
                 } else {
                     e
                 }
             };
             let res = if is_host {
                 dir.close(&room_id, my.as_deref(), &keychip).map_err(|e| {
-                    friendly(tf!("关闭房间失败：{}", "Failed to close the room: {}", e))
+                    friendly(t!("page_room.failed_to_close_room", error = e).to_string())
                 })
             } else {
                 match my {
                     Some(peer) => dir.leave(&room_id, &peer).map_err(|e| {
-                        friendly(tf!("退出房间失败：{}", "Failed to leave the room: {}", e))
+                        friendly(t!("page_room.failed_to_leave_room", error = e).to_string())
                     }),
-                    None => Err(t!("未找到本机 awl 身份，无法退出房间",
-                                   "Local awl identity not found; cannot leave the room").to_string()),
+                    None => Err(t!("page_room.local_awl_identity_not_found").to_string()),
                 }
             };
             AwlManager::remove_all_peers();
@@ -555,7 +543,7 @@ impl Launcher {
         if self.room_status != RoomStatus::Idle {
             return;
         }
-        let keychip = self.system.keychip.clone().unwrap_or_default();
+        let keychip = self.keychip.clone().unwrap_or_default();
         let has_keychip = !keychip.trim().is_empty();
         let last_room_id = self.room.last_room_id.clone().unwrap_or_default();
         let last_password = self.room.last_room_password.clone().unwrap_or_default();
@@ -571,7 +559,7 @@ impl Launcher {
             self.room_join_password = last_password.clone();
             self.room_status = RoomStatus::Joining { room_id: last_room_id.clone() };
         }
-        self.room_overlay = Some(t!("正在回归房间…", "Returning to your room…").to_string());
+        self.room_overlay = Some(t!("page_room.returning_to_room").to_string());
         let cfg = self.room.clone();
         let dir = self.dir_client();
         let handle = self.room_handle.clone();
@@ -581,7 +569,7 @@ impl Launcher {
                 match dir.my_room(&keychip) {
                     Ok(Some(room)) => {
 
-                        let game_id = crate::db::games()
+                        let game_id = crate::db::room_games()
                             .into_iter()
                             .find(|g| g.name == room.game)
                             .and_then(|g| g.game_id);
@@ -738,10 +726,7 @@ impl Launcher {
                     if sync.is_closed() {
                         self.room_stop(context);
                         self.dialog = Dialog::Error {
-                            message: t!(
-                                "房主已关闭房间",
-                                "The host has closed the room"
-                            )
+                            message: t!("page_room.host_has_closed_room")
                             .to_string(),
                         };
                         return;
@@ -772,10 +757,7 @@ impl Launcher {
 
                                 self.room_stop(context);
                                 self.dialog = Dialog::Error {
-                                    message: t!(
-                                        "你已被移出房间",
-                                        "You have been removed from the room"
-                                    )
+                                    message: t!("page_room.have_been_removed_from_room")
                                     .to_string(),
                                 };
                                 return;
@@ -837,7 +819,7 @@ impl Launcher {
                     if since.elapsed() >= HOST_DOWN_TIMEOUT {
                         self.room_stop(context);
                         self.dialog = Dialog::Error {
-                            message: t!("房间已断开", "Room disconnected").to_string(),
+                            message: t!("page_room.room_disconnected").to_string(),
                         };
                         return;
                     }
@@ -980,8 +962,8 @@ fn member_cells(
 
 fn playing_label(playing: Option<bool>) -> String {
     match playing {
-        Some(true) => t!("游玩中", "Playing").to_string(),
-        Some(false) => t!("空闲", "Idle").to_string(),
+        Some(true) => t!("page_room.playing").to_string(),
+        Some(false) => t!("page_room.idle").to_string(),
         None => "—".to_string(),
     }
 }
@@ -1002,7 +984,7 @@ impl Launcher {
                 StackPanel::new()
                     .grid_column(0)
                     .children([TextBlock::new()
-                        .text(t!("店内对战", "In-Store Battles"))
+                        .text(t!("nav.in_store_battles"))
                         .font_size(26.0)
                         .font_weight(FontWeight::SEMI_BOLD)]),
                 StackPanel::new()
@@ -1027,16 +1009,16 @@ impl Launcher {
                     .style(ButtonStyle::Accent)
                     .is_enabled(idle)
                     .on_click(context.message(Message::RoomOpenCreateDialog))
-                    .content(t!("创建…", "Create…")),
+                    .content(t!("page_room.create").to_string()),
                 Button::new()
                     .is_enabled(idle)
                     .on_click(context.message(Message::RoomOpenJoinDialog))
-                    .content(t!("加入…", "Join…")),
+                    .content(t!("page_room.join_by_id").to_string()),
                 Button::new()
                     .style(ButtonStyle::Subtle)
                     .is_enabled(idle)
                     .on_click(context.message(Message::RoomRefreshList))
-                    .content(t!("刷新", "Refresh")),
+                    .content(t!("page_room.refresh").to_string()),
             ))
             .into();
 
@@ -1044,10 +1026,10 @@ impl Launcher {
             TextBlock::new()
                 .text(match &self.room_status {
                     RoomStatus::Creating { name } => {
-                        tf!("正在创建房间「{name}」…", "Creating room \"{name}\"…")
+                        t!("page_room.creating_named_room", name = name).to_string()
                     }
                     RoomStatus::Joining { room_id } => {
-                        tf!("正在加入房间 {room_id}…", "Joining room {room_id}…")
+                        t!("page_room.joining_room_by_id", room_id = room_id).to_string()
                     }
                     _ => String::new(),
                 })
@@ -1067,9 +1049,9 @@ impl Launcher {
 
         let mut cells: Vec<KeyedView> = Vec::new();
         let headers = [
-            t!("房间名称", "Room").to_string(),
-            t!("游戏", "Game").to_string(),
-            t!("人数", "Players").to_string(),
+            t!("page_room.room").to_string(),
+            t!("page_room.game").to_string(),
+            t!("page_room.players").to_string(),
         ];
         for (c, txt) in headers.iter().enumerate() {
             cells.push(KeyedView::new(format!("h{c}"), View::from(
@@ -1097,9 +1079,9 @@ impl Launcher {
             let row = (i + 2) as i32;
             let room_id = r.room_id.clone();
             let (players_color, join_label) = if r.max > r.players {
-                (Color::argb(255, 0x6C, 0xCB, 0x5F), t!("加入", "Join").to_string())
+                (Color::argb(255, 0x6C, 0xCB, 0x5F), t!("common.join").to_string())
             } else {
-                (Color::argb(255, 0xFF, 0x99, 0xA4), t!("已满", "Full").to_string())
+                (Color::argb(255, 0xFF, 0x99, 0xA4), t!("page_room.full").to_string())
             };
             cells.push(KeyedView::new(format!("r{row}c0"), View::from(
                 TextBlock::new()
@@ -1148,10 +1130,7 @@ impl Launcher {
                         .glyph("\u{E70A}")
                         .opacity(0.4),
                     TextBlock::new()
-                        .text(t!(
-                            "暂无公开房间，点右上角「创建…」开一个",
-                            "No public rooms yet; click \"Create...\" to open one"
-                        ))
+                        .text(t!("page_room.no_public_rooms_yet"))
                         .opacity(0.6),
                 ))
                 .into()
@@ -1183,7 +1162,7 @@ impl Launcher {
                     .children((
                         settings_row(
                             View::from(SymbolIcon::new().symbol(Symbol::List)),
-                            t!("公开房间", "Public rooms"),
+                            &t!("page_room.public_rooms"),
                             View::from(
                                 StackPanel::new()
                                     .orientation(Orientation::Horizontal)
@@ -1192,14 +1171,14 @@ impl Launcher {
                                         ComboBox::new()
                                             .width(280.0)
                                             .items_source({
-                                                let mut items = vec![t!("全部游戏", "All games").to_string()];
-                                                items.extend(crate::db::game_names());
+                                                let mut items = vec![t!("page_room.all_games").to_string()];
+                                                items.extend(crate::db::room_game_names());
                                                 items
                                             })
                                             .selected_index(
                                                 self.room_filter_idx.map(|i| i + 1),
                                             )
-                                            .placeholder_text(t!("全部游戏", "All games"))
+                                            .placeholder_text(t!("page_room.all_games"))
                                             .on_selection_changed(
                                                 context.callback(Message::RoomFilterChanged),
                                             )
@@ -1208,7 +1187,7 @@ impl Launcher {
                                             .style(ButtonStyle::Subtle)
                                             .is_enabled(!busy)
                                             .on_click(context.message(Message::RoomRefreshList))
-                                            .content(t!("刷新", "Refresh")),
+                                            .content(t!("page_room.refresh").to_string()),
                                     )),
                             ),
                         ),
@@ -1245,13 +1224,13 @@ impl Launcher {
         ];
         let mut mcells: Vec<KeyedView> = Vec::new();
         let mheaders = [
-            t!("机位", "Seat").to_string(),
-            t!("成员", "Member").to_string(),
-            t!("地址", "Address").to_string(),
-            t!("状态", "Status").to_string(),
-            t!("游玩", "Play").to_string(),
-            t!("延迟", "Ping").to_string(),
-            t!("链路", "Link").to_string(),
+            t!("page_room.seat").to_string(),
+            t!("page_room.member").to_string(),
+            t!("page_room.address").to_string(),
+            t!("common.status").to_string(),
+            t!("page_room.play").to_string(),
+            t!("page_room.ping").to_string(),
+            t!("page_room.link").to_string(),
         ];
         for (c, txt) in mheaders.iter().enumerate() {
             mcells.push(KeyedView::new(
@@ -1315,9 +1294,9 @@ impl Launcher {
             }
         };
         let self_name = if is_host {
-            tf!("{0}（房主·本机）", "{0} (host, this PC)", self_nick)
+            t!("page_room.self_nick_host_this", self_nick = self_nick).to_string()
         } else {
-            tf!("{0}（本机）", "{0} (this PC)", self_nick)
+            t!("page_room.self_nick_this_pc", self_nick = self_nick).to_string()
         };
 
         struct MemberRow {
@@ -1342,7 +1321,7 @@ impl Launcher {
             connected: true,
             playing: playing_label(Some(self.game_running)),
             ping: "-".to_string(),
-            link: t!("本机", "local").to_string(),
+            link: t!("page_room.local").to_string(),
         }];
 
         let nick_map: HashMap<String, String> = if is_host {
@@ -1386,14 +1365,14 @@ impl Launcher {
                 }
             };
             let name = if is_host_row {
-                tf!("{0}（房主）", "{0} (host)", name)
+                t!("page_room.name_host", name = name).to_string()
             } else {
                 name
             };
             let link = if p.through_relay {
-                t!("中继", "relay").to_string()
+                t!("page_room.relay").to_string()
             } else {
-                t!("直连", "direct").to_string()
+                t!("page_room.direct").to_string()
             };
 
             let seat = seat_label(
@@ -1461,7 +1440,7 @@ impl Launcher {
                 .unwrap_or_else(|| self.room_join_password.clone())
         };
         let pw_display: String = if room_pw.trim().is_empty() {
-            t!("无（公开房间）", "None (public room)").to_string()
+            t!("page_room.none").to_string()
         } else {
             room_pw
         };
@@ -1471,12 +1450,12 @@ impl Launcher {
 
         let (status_text, sr, sg, sb) = match &self.room_status {
             RoomStatus::Hosting { .. } => {
-                (t!("房间开放中", "Room open").to_string(), 0x6C, 0xCB, 0x5F)
+                (t!("page_room.room_open").to_string(), 0x6C, 0xCB, 0x5F)
             }
             RoomStatus::Joined { .. } => {
-                (t!("已加入", "Joined").to_string(), 0x6C, 0xCB, 0x5F)
+                (t!("page_room.joined").to_string(), 0x6C, 0xCB, 0x5F)
             }
-            _ => (t!("处理中…", "Working…").to_string(), 0x9E, 0x9E, 0x9E),
+            _ => (t!("page_room.working").to_string(), 0x9E, 0x9E, 0x9E),
         };
 
         let members_table = self.room_members_table(is_host);
@@ -1496,7 +1475,7 @@ impl Launcher {
                     .children((
                         settings_row(
                             View::from(SymbolIcon::new().symbol(Symbol::Contact)),
-                            t!("成员", "Members"),
+                            &t!("page_room.members"),
                             View::from(
                                 TextBlock::new()
                                     .text(format!("● {status_text}"))
@@ -1522,7 +1501,7 @@ impl Launcher {
                     .children((
                         settings_row(
                             View::from(SymbolIcon::new().symbol(Symbol::World)),
-                            t!("房间 ID", "Room ID"),
+                            &t!("common.room_id"),
                             View::from(
                                 selectable_text(room_id.clone())
                                     .font_size(18.0)
@@ -1533,7 +1512,7 @@ impl Launcher {
                         separator(),
                         settings_row(
                             View::from(SymbolIcon::new().symbol(Symbol::Permissions)),
-                            t!("房间密码", "Room password"),
+                            &t!("page_room.room_password"),
                             View::from(
                                 selectable_text(pw_display)
                                     .font_size(16.0)
@@ -1544,7 +1523,7 @@ impl Launcher {
                         separator(),
                         settings_row(
                             View::from(SymbolIcon::new().symbol(Symbol::List)),
-                            t!("游戏", "Game"),
+                            &t!("page_room.game"),
                             View::from(
                                 selectable_text(self.room_game.clone())
                                     .opacity(0.85)
@@ -1555,7 +1534,7 @@ impl Launcher {
                         separator(),
                         settings_row(
                             View::from(SymbolIcon::new().symbol(Symbol::Play)),
-                            t!("游戏地址（本机）", "Game address (this PC)"),
+                            &t!("page_room.game_address"),
                             View::from(
                                 selectable_text(self.room_my_ip.clone().unwrap_or_default())
                                     .font_size(16.0)
@@ -1572,7 +1551,7 @@ impl Launcher {
                         if has_serverbox_addr {
                             settings_row(
                                 View::from(SymbolIcon::new().symbol(Symbol::MapDrive)),
-                                t!("ServerBox 地址", "ServerBox address"),
+                                &t!("page_room.serverbox_address"),
                                 View::from(
                                     selectable_text(crate::awl::HOST_SERVERBOX_IP.to_string())
                                         .font_size(16.0)
@@ -1603,14 +1582,14 @@ impl Launcher {
                         .on_click(context.message(Message::LaunchStop(
                             room_index.unwrap_or_default(),
                         )))
-                        .content(t!("关闭", "Close")),
+                        .content(t!("common.close").to_string()),
                 )
             } else {
                 View::from(
                     Button::new()
                         .style(ButtonStyle::Accent)
                         .on_click(context.message(Message::RoomLaunchGame))
-                        .content(t!("启动游戏", "Launch game")),
+                        .content(t!("common.launch_game").to_string()),
                 )
             },
         ));
@@ -1624,13 +1603,13 @@ impl Launcher {
                             .on_click(context.message(Message::ServerBoxStop(
                                 room_index.unwrap_or_default(),
                             )))
-                            .content(t!("关闭", "Close")),
+                            .content(t!("common.close").to_string()),
                     )
                 } else {
                     View::from(
                         Button::new()
                             .on_click(context.message(Message::RoomLaunchServerBox))
-                            .content(t!("启动 ServerBox", "Launch ServerBox")),
+                            .content(t!("page_room.launch_serverbox").to_string()),
                     )
                 },
             ));
@@ -1641,13 +1620,13 @@ impl Launcher {
                 View::from(
                     Button::new()
                         .on_click(context.message(Message::RoomCloseClicked))
-                        .content(t!("关闭房间", "Close room")),
+                        .content(t!("page_room.close_room").to_string()),
                 )
             } else {
                 View::from(
                     Button::new()
                         .on_click(context.message(Message::RoomLeaveClicked))
-                        .content(t!("离开房间", "Leave room")),
+                        .content(t!("page_room.leave_room").to_string()),
                 )
             },
         ));
@@ -1678,13 +1657,10 @@ impl Launcher {
                                         .font_weight(FontWeight::SEMI_BOLD),
                                     TextBlock::new()
                                         .text(if is_host {
-                                            t!(
-                                                "把房间 ID 分享给好友",
-                                                "Share the room ID"
-                                            )
+                                            t!("page_room.share_room_id")
                                             .to_string()
                                         } else {
-                                            t!("已加入房间", "Joined")
+                                            t!("page_room.joined_room")
                                                 .to_string()
                                         })
                                         .font_size(12.0)

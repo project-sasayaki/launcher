@@ -25,6 +25,8 @@ pub enum RowAction {
     RemoveAmdaemon,
     AddGameExe,
     RemoveGameExe,
+    /// Open the game's own settings page.
+    GameSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +46,7 @@ pub enum Message {
 
     IcfIdentified(Box<IcfPayload>),
     ServerPolled(ServerState),
-    CardsScanned(Box<CardScan>),
+    CardsScanned(u32, Box<CardScan>),
     CardClicked(usize),
     WindowResized(WindowSize),
     CardSlideTick(f64),
@@ -95,11 +97,11 @@ pub enum Message {
 
     CardComposeFailed(String),
 
-    CardsLoadTick,
+    CardsLoadTick(u32),
 
     AimeCardCreate,
 
-    AimeCardCreated(Result<String, String>),
+    AimeCardCreated(u32, Result<(), String>),
 
     BlankCardSelect,
 
@@ -170,7 +172,22 @@ pub enum Message {
 
     InputCapturedXi(u32, usize, String),
 
-    InputCaptureTimeout(u32, usize),
+    InputCaptureTimeout(u32),
+
+    /// A tab of the game's settings page was chosen, by its title.
+    SettingsTabSelected(Option<String>),
+    /// A WMMT3 setting was given a value (`None` when its control was emptied, or its
+    /// dialog cancelled).
+    Wmmt3SettingChanged(&'static str, Option<String>),
+    /// Choose the folder or file of a WMMT3 path setting in a dialog, by its key.
+    Wmmt3BrowsePath(&'static str),
+    /// Capture a WMMT3 button binding from the device.
+    Wmmt3CaptureStart(&'static str),
+    /// A WMMT3 button binding was captured: epoch, setting key, value.
+    Wmmt3Captured(u32, &'static str, String),
+    /// The capture got an input KittenTools cannot use: epoch, text key of the reason.
+    Wmmt3CaptureUnusable(u32, &'static str),
+    Wmmt3DevicesScanned(Box<Vec<rawinput::GameDevice>>),
 
     InputCaptureTick(u32),
 
@@ -316,8 +333,8 @@ pub(super) enum Dialog {
     },
 
     InputCapture {
-        slot: usize,
-        label: &'static str,
+        /// Text key of the label of the binding being captured.
+        label_key: &'static str,
     },
 
     DeviceDiagnostics {

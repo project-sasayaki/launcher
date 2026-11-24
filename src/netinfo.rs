@@ -1,3 +1,4 @@
+use rust_i18n::t;
 use windows::Win32::Foundation::ERROR_BUFFER_OVERFLOW;
 use windows::Win32::NetworkManagement::IpHelper::{
     GAA_FLAG_INCLUDE_PREFIX, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
@@ -40,7 +41,7 @@ impl AdapterInfo {
         if self.description.is_empty() {
             self.friendly.clone()
         } else {
-            format!("{}（{}）", self.friendly, self.description)
+            t!("netinfo.adapter_label", name = self.friendly, description = self.description).to_string()
         }
     }
 }
@@ -100,6 +101,13 @@ pub fn subnet_labels(ips: &[IpInfo]) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether the adapter named `friendly` has the IPv4 address `ip` right now.
+pub fn adapter_has_ip(friendly: &str, ip: &str) -> bool {
+    list_adapters()
+        .iter()
+        .any(|a| a.friendly == friendly && a.ips.iter().any(|i| i.ip == ip))
 }
 
 pub fn list_adapters() -> Vec<AdapterInfo> {
@@ -319,7 +327,7 @@ mod tests {
             description: "Realtek PCIe".into(),
             ips: Vec::new(),
         };
-        assert_eq!(ad.label(), "以太网（Realtek PCIe）");
+        assert_eq!(ad.label(), t!("netinfo.adapter_label", name = "以太网", description = "Realtek PCIe"));
         let no_desc = AdapterInfo {
             description: String::new(),
             ..ad
@@ -331,10 +339,10 @@ mod tests {
     fn list_adapters_smoke() {
         let adapters = list_adapters();
         for a in &adapters {
-            assert!(!a.guid.is_empty(), "网卡 GUID 不应为空");
-            assert!(!a.friendly.is_empty(), "网卡 FriendlyName 不应为空");
+            assert!(!a.guid.is_empty(), "the adapter GUID should not be empty");
+            assert!(!a.friendly.is_empty(), "the adapter FriendlyName should not be empty");
             for ip in &a.ips {
-                assert!(parse_ipv4(&ip.ip).is_some(), "非法 IPv4: {}", ip.ip);
+                assert!(parse_ipv4(&ip.ip).is_some(), "invalid IPv4: {}", ip.ip);
                 assert!(ip.prefix <= 32);
                 assert!(network_cidr(ip).contains('/'));
             }

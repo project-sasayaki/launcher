@@ -3,17 +3,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use rust_i18n::t;
 use windows_reactor::*;
 
 use crate::cards::{self, CardEntry, CardScan};
-use crate::t;
-use crate::tf;
-use crate::storage::Loader;
-
+use crate::games::wmmt3::{self, BuiltInCardReader};
+use crate::games::{CardKind, family_of, game_dir_of};
 use crate::reactor_app::Launcher;
-use crate::reactor_app::message::Message;
-use crate::reactor_app::state::CardBaseCache;
+use crate::reactor_app::message::{Dialog, Message};
+use crate::reactor_app::state::{CardBaseCache, CardImage};
 use crate::reactor_app::widgets::placeholder_page;
+use crate::storage::GameRecord;
 
 pub(in crate::reactor_app) const CARD_BASE_W: f64 = 698.0;
 pub(in crate::reactor_app) const CARD_BASE_H: f64 = 441.0;
@@ -49,6 +49,9 @@ pub(in crate::reactor_app) const ID6_BASE_PNG: &[u8] = include_bytes!("../../ass
 pub(in crate::reactor_app) const ID6_BASE_W: f64 = 698.0;
 pub(in crate::reactor_app) const ID6_BASE_H: f64 = 440.0;
 
+const WMMT3_CARD_W: f64 = 156.0;
+const WMMT3_CARD_H: f64 = WMMT3_CARD_W * 1019.0 / 640.0;
+
 pub(in crate::reactor_app) const COVER_ASSETS: &[(&str, &[u8])] = &[
     ("logo_D4.png", include_bytes!("../../assets/logo_D4.png")),
     ("logo_D4kai.png", include_bytes!("../../assets/logo_D4kai.png")),
@@ -63,6 +66,9 @@ pub(in crate::reactor_app) const COVER_ASSETS: &[(&str, &[u8])] = &[
     ("logo_D8.png", include_bytes!("../../assets/logo_D8.png")),
     ("logo_dac.png", include_bytes!("../../assets/logo_dac.png")),
     ("logo_idz.png", include_bytes!("../../assets/logo_idz.png")),
+    ("logo_wm3.png", include_bytes!("../../assets/logo_wm3.png")),
+    ("logo_wm3dx.png", include_bytes!("../../assets/logo_wm3dx.png")),
+    ("logo_wm3dxplus.png", include_bytes!("../../assets/logo_wm3dxplus.png")),
 
     ("logo_D4_big.png", include_bytes!("../../assets/logo_D4_big.png")),
     ("logo_D4kai_big.png", include_bytes!("../../assets/logo_D4kai_big.png")),
@@ -74,6 +80,9 @@ pub(in crate::reactor_app) const COVER_ASSETS: &[(&str, &[u8])] = &[
     ("logo_D8_big.png", include_bytes!("../../assets/logo_D8_big.png")),
     ("logo_dac_big.png", include_bytes!("../../assets/logo_dac_big.png")),
     ("logo_idz_big.png", include_bytes!("../../assets/logo_idz_big.png")),
+    ("logo_wm3_big.png", include_bytes!("../../assets/logo_wm3_big.png")),
+    ("logo_wm3dx_big.png", include_bytes!("../../assets/logo_wm3dx_big.png")),
+    ("logo_wm3dxplus_big.png", include_bytes!("../../assets/logo_wm3dxplus_big.png")),
 ];
 
 pub(in crate::reactor_app) const CARD_CAR_OFFSET_X: i64 = 0;
@@ -90,18 +99,32 @@ impl Launcher {
             None
         });
         let Some(gi) = self.cards_game else {
-            return placeholder_page(t!("卡片选择", "Card select"), t!("请先在「游戏」页单击一个游戏进入卡片选择。", "Go to the Games page and click a game to open card selection."));
+            return placeholder_page(&t!("common.card_select"), &t!("page_cards.go_to_games_page_and"));
         };
         let Some(game) = self.library.games.get(gi) else {
-            return placeholder_page(t!("卡片选择", "Card select"), t!("游戏不存在。", "The game no longer exists."));
+            return placeholder_page(&t!("common.card_select"), &t!("page_cards.game_no_longer_exists"));
         };
         let _ = game;
-        let aime_mode = self.cards_aime;
+        let aime_mode = self.card_kind == CardKind::Aime;
 
         let aime_item_w = CARD_W * CARD_DISPLAY_SCALE;
         let aime_item_h = aime_item_w * AIME_BASE_H / AIME_BASE_W;
 
-        let wrap_rows = |rows: Vec<KeyedView>| -> View {
+        let wrap_cards = |items: Vec<KeyedView>, cols: usize| -> View {
+            let rows: Vec<KeyedView> = items
+                .chunks(cols)
+                .enumerate()
+                .map(|(row, chunk)| {
+                    KeyedView::new(
+                        format!("card-row-{row}"),
+                        StackPanel::new()
+                            .orientation(Orientation::Horizontal)
+                            .spacing(CARD_GAP)
+                            .margin(Thickness::new(0.0, 0.0, 0.0, CARD_ROW_SPACING))
+                            .keyed_children(chunk.to_vec()),
+                    )
+                })
+                .collect();
             ScrollViewer::new()
                 .margin(Thickness::new(0.0, 12.0, 0.0, 0.0))
                 .vertical_scroll_bar_visibility(ScrollBarVisibility::Visible)
@@ -129,7 +152,7 @@ impl Launcher {
                         .height(40.0)
                         .horizontal_alignment(HorizontalAlignment::Center),
                     TextBlock::new()
-                        .text(t!("正在加载卡片…", "Loading cards…"))
+                        .text(t!("page_cards.loading_cards"))
                         .font_size(14.0)
                         .opacity(0.7)
                         .horizontal_alignment(HorizontalAlignment::Center),
@@ -148,25 +171,26 @@ impl Launcher {
                     self.aime_item(context, i, c, aime_item_w, aime_item_h),
                 ));
             }
-            let card_rows: Vec<KeyedView> = items
-                .chunks(cols)
-                .enumerate()
-                .map(|(row, chunk)| {
-                    let panel = StackPanel::new()
-                        .orientation(Orientation::Horizontal)
-                        .spacing(CARD_GAP)
-                        .margin(Thickness::new(0.0, 0.0, 0.0, CARD_ROW_SPACING))
-                        .keyed_children(chunk.to_vec());
-                    KeyedView::new(format!("card-row-{row}"), panel)
-                })
-                .collect();
-            wrap_rows(card_rows)
+            wrap_cards(items, cols)
+        } else if self.card_kind == CardKind::Wmmt3 {
+            let blank_active = self.cards.active.is_some() && self.cards.active_index().is_none();
+            let mut items = vec![KeyedView::new(
+                "blank-card",
+                self.blank_card_tile(context, WMMT3_CARD_W, WMMT3_CARD_H, blank_active),
+            )];
+            for (index, card) in self.cards.cards.iter().enumerate() {
+                items.push(KeyedView::new(
+                    card.name.clone(),
+                    self.wmmt3_card_item(context, index, card),
+                ));
+            }
+            wrap_cards(items, self.card_columns(WMMT3_CARD_W))
         } else {
 
             let mut failed = 0usize;
             let mut first_reason = String::new();
             for card in &self.cards.cards {
-                if let Err(reason) = self.compose_card_image(&card.path, self.dpi_scale) {
+                if let Err(reason) = self.card_image(&card.path) {
                     failed += 1;
                     if first_reason.is_empty() {
                         first_reason = reason.to_string();
@@ -175,9 +199,9 @@ impl Launcher {
             }
             if failed > 0 {
                 let summary = if failed == 1 {
-                    tf!("卡片无法显示：{}", "Card cannot be displayed: {}", first_reason)
+                    t!("page_cards.card_cannot_be_displayed", first_reason = first_reason).to_string()
                 } else {
-                    tf!("{} 张卡片无法显示：{}", "{} cards cannot be displayed: {}", failed, first_reason)
+                    t!("page_cards.cards_cannot_be_displayed", failed = failed, first_reason = first_reason).to_string()
                 };
 
                 let sender = context.sender();
@@ -191,11 +215,11 @@ impl Launcher {
                 );
             }
 
-            let (bw, bh) = if self.cards_id4 {
+            let (bw, bh) = if self.card_kind == CardKind::Id4 {
                 (ID4_BASE_W, ID4_BASE_H)
-            } else if self.cards_id6 {
+            } else if self.card_kind == CardKind::Id6 {
                 (ID6_BASE_W, ID6_BASE_H)
-            } else if self.cards_id8 {
+            } else if self.card_kind == CardKind::Id8 {
                 (ID8_BASE_W, ID8_BASE_H)
             } else {
                 (CARD_BASE_W, CARD_BASE_H)
@@ -220,25 +244,13 @@ impl Launcher {
                     self.card_item(context, i, c),
                 ));
             }
-            let card_rows: Vec<KeyedView> = items
-                .chunks(cols)
-                .enumerate()
-                .map(|(row, chunk)| {
-                    let panel = StackPanel::new()
-                        .orientation(Orientation::Horizontal)
-                        .spacing(CARD_GAP)
-                        .margin(Thickness::new(0.0, 0.0, 0.0, CARD_ROW_SPACING))
-                        .keyed_children(chunk.to_vec());
-                    KeyedView::new(format!("card-row-{row}"), panel)
-                })
-                .collect();
-            wrap_rows(card_rows)
+            wrap_cards(items, cols)
         };
 
         let active = self.card_slide;
 
         let title: View = TextBlock::new()
-            .text(t!("卡片选择", "Card select"))
+            .text(t!("common.card_select"))
             .font_size(26.0)
             .font_weight(FontWeight::SEMI_BOLD)
             .into();
@@ -282,6 +294,23 @@ impl Launcher {
         h: f64,
         active: bool,
     ) -> View {
+        let mut labels = vec![KeyedView::new(
+            "title",
+            TextBlock::new()
+                .text(t!("page_cards.blank_card"))
+                .font_size(15.0)
+                .font_weight(FontWeight::SEMI_BOLD)
+                .horizontal_alignment(HorizontalAlignment::Center),
+        )];
+        if self.card_kind == CardKind::Wmmt3 {
+            labels.push(KeyedView::new(
+                "hint",
+                TextBlock::new()
+                    .text(t!("page_cards.wmmt3_blank_hint"))
+                    .font_size(12.0)
+                    .text_wrapping(TextWrapping::Wrap),
+            ));
+        }
         Border::new()
             .width(w)
             .height(h)
@@ -296,13 +325,11 @@ impl Launcher {
             .on_pointer_pressed(context.callback(|_| Message::BlankCardSelect))
             .content(
                 StackPanel::new()
+                    .margin(Thickness::new(10.0, 0.0, 10.0, 0.0))
                     .horizontal_alignment(HorizontalAlignment::Center)
                     .vertical_alignment(VerticalAlignment::Center)
                     .spacing(6.0)
-                    .children([TextBlock::new()
-                        .text(t!("空白车卡", "Blank card"))
-                        .font_size(15.0)
-                        .font_weight(FontWeight::SEMI_BOLD)]),
+                    .keyed_children(labels),
             )
             .into()
     }
@@ -329,7 +356,7 @@ impl Launcher {
                     .children((
                         TextBlock::new().text("＋").font_size(30.0).opacity(0.7),
                         TextBlock::new()
-                            .text(t!("新建车卡", "New card"))
+                            .text(t!("page_cards.new_card"))
                             .font_size(13.0),
                     )),
             )
@@ -395,9 +422,7 @@ impl Launcher {
     }
 
     pub(in crate::reactor_app) fn aime_device_dir(&self) -> Option<PathBuf> {
-        let gi = self.cards_game?;
-        let rec = self.library.games.get(gi)?;
-        let amdaemon = PathBuf::from(rec.amdaemon.as_deref()?);
+        let amdaemon = Path::new(self.card_game()?.amdaemon.as_deref()?);
         Some(amdaemon.parent()?.join("DEVICE"))
     }
 
@@ -412,11 +437,11 @@ impl Launcher {
         if self.base_cache.borrow().is_some() {
             return;
         }
-        let png = if self.cards_id4 {
+        let png = if self.card_kind == CardKind::Id4 {
             ID4_BASE_PNG
-        } else if self.cards_id6 {
+        } else if self.card_kind == CardKind::Id6 {
             ID6_BASE_PNG
-        } else if self.cards_id8 {
+        } else if self.card_kind == CardKind::Id8 {
             ID8_BASE_PNG
         } else {
             CARD_BASE_PNG
@@ -429,11 +454,11 @@ impl Launcher {
     fn decode_builtin_base(png: &[u8]) -> Result<image::RgbaImage, String> {
         image::load_from_memory(png)
             .map(|img| img.to_rgba8())
-            .map_err(|e| tf!("解码内置底图失败：{}", "Failed to decode built-in base image: {}", e))
+            .map_err(|e| t!("page_cards.failed_to_decode_built_in", error = e).to_string())
     }
 
     fn card_car_offset(&self) -> (i64, i64) {
-        if self.cards_id4 {
+        if self.card_kind == CardKind::Id4 {
             (-5, CARD_CAR_OFFSET_Y)
         } else {
             (CARD_CAR_OFFSET_X, CARD_CAR_OFFSET_Y)
@@ -457,39 +482,37 @@ impl Launcher {
         base
     }
 
-    fn compose_card_image(
-        &self,
-        car_path: &Path,
-        dpi_scale: f64,
-    ) -> Result<(Arc<[u8]>, f64, f64), Arc<str>> {
-
-        if let Some(cached) = self.compose_cache.borrow().get(car_path) {
+    fn card_image(&self, path: &Path) -> Result<CardImage, Arc<str>> {
+        if let Some(cached) = self.card_image_cache.borrow().get(path) {
             return cached.clone();
         }
 
-        let fail = |reason: String| {
-            let err: Arc<str> = reason.into();
-            self.compose_cache
-                .borrow_mut()
-                .insert(car_path.to_path_buf(), Err(err.clone()));
-            Err(err)
-        };
+        let result = match self.card_kind {
+            CardKind::Wmmt3 => load_wmmt3_card_image(path),
+            _ => self.compose_initial_d_card_image(path),
+        }
+        .map_err(Arc::from);
+        self.card_image_cache
+            .borrow_mut()
+            .insert(path.to_path_buf(), result.clone());
+        result
+    }
 
+    fn compose_initial_d_card_image(&self, car_path: &Path) -> Result<CardImage, String> {
         self.ensure_card_base();
         let base = match self.base_cache.borrow().as_ref().map(|c| &c.result) {
             Some(Ok(img)) => img.clone(),
-            Some(Err(e)) => return fail(tf!("底图加载失败：{}", "Base image load failed: {}", e)),
-            None => return fail(t!("底图未加载", "Base image not loaded").to_string()),
+            Some(Err(e)) => return Err(t!("page_cards.base_image_load_failed", error = e).to_string()),
+            None => return Err(t!("page_cards.base_image_not_loaded").to_string()),
         };
         let (canvas_w, canvas_h) = (base.width(), base.height());
 
-        let car = match image::open(car_path) {
-            Ok(img) => img.to_rgba8(),
-            Err(e) => return fail(tf!("卡图解码失败：{}", "Card image decode failed: {}", e)),
-        };
+        let car = image::open(car_path)
+            .map_err(|e| t!("page_cards.card_image_decode_failed", error = e).to_string())?
+            .to_rgba8();
 
         let (ox, oy) = self.card_car_offset();
-        let composed = Self::overlay_car(base, &car, dpi_scale, ox, oy);
+        let composed = Self::overlay_car(base, &car, self.dpi_scale, ox, oy);
 
         let mut out = Cursor::new(Vec::new());
         let encoder = image::codecs::png::PngEncoder::new_with_quality(
@@ -497,17 +520,14 @@ impl Launcher {
             image::codecs::png::CompressionType::Fast,
             image::codecs::png::FilterType::NoFilter,
         );
-        if let Err(e) = composed.write_with_encoder(encoder) {
-            return fail(tf!("合成图编码失败：{}", "Composite image encode failed: {}", e));
-        }
-
-        let bytes: Arc<[u8]> = out.into_inner().into();
-        let result = (bytes, canvas_w as f64, canvas_h as f64);
-
-        self.compose_cache
-            .borrow_mut()
-            .insert(car_path.to_path_buf(), Ok(result.clone()));
-        Ok(result)
+        composed
+            .write_with_encoder(encoder)
+            .map_err(|e| t!("page_cards.composite_image_encode_failed", error = e).to_string())?;
+        Ok(CardImage {
+            bytes: out.into_inner().into(),
+            width: f64::from(canvas_w),
+            height: f64::from(canvas_h),
+        })
     }
 
     fn card_display_w(&self) -> f64 {
@@ -515,9 +535,11 @@ impl Launcher {
         self.cards
             .cards
             .first()
-            .and_then(|c| self.compose_cache.borrow().get(&c.path).cloned())
-            .and_then(|r| r.ok())
-            .map(|(_, w, _)| w / s * CARD_DISPLAY_SCALE)
+            .and_then(|card| {
+                let cache = self.card_image_cache.borrow();
+                let image = cache.get(&card.path)?.as_ref().ok()?;
+                Some(image.width / s * CARD_DISPLAY_SCALE)
+            })
             .unwrap_or(CARD_W * CARD_DISPLAY_SCALE)
     }
 
@@ -533,11 +555,11 @@ impl Launcher {
     }
 
     fn card_fallback_size(&self) -> (f64, f64) {
-        let (bw, bh) = if self.cards_id4 {
+        let (bw, bh) = if self.card_kind == CardKind::Id4 {
             (ID4_BASE_W, ID4_BASE_H)
-        } else if self.cards_id6 {
+        } else if self.card_kind == CardKind::Id6 {
             (ID6_BASE_W, ID6_BASE_H)
-        } else if self.cards_id8 {
+        } else if self.card_kind == CardKind::Id8 {
             (ID8_BASE_W, ID8_BASE_H)
         } else {
             (CARD_BASE_W, CARD_BASE_H)
@@ -549,18 +571,17 @@ impl Launcher {
     }
 
     fn card_item(&self, context: &mut ViewContext<Self>, index: usize, card: &CardEntry) -> View {
-        let active = self.cards.active_index() == Some(index);
         let (fallback_w, fallback_h) = self.card_fallback_size();
 
         let s = self.dpi_scale.max(0.01);
         let (content_view, card_w, card_h): (View, f64, f64) =
-            match self.compose_card_image(&card.path, self.dpi_scale) {
-                Ok((bytes, w, h)) => {
-                    let cw = w / s * CARD_DISPLAY_SCALE;
-                    let ch = h / s * CARD_DISPLAY_SCALE;
+            match self.card_image(&card.path) {
+                Ok(image) => {
+                    let cw = image.width / s * CARD_DISPLAY_SCALE;
+                    let ch = image.height / s * CARD_DISPLAY_SCALE;
                     (
                         Image::new()
-                            .source_data(EncodedImage::new(bytes))
+                            .source_data(EncodedImage::new(image.bytes))
                             .width(cw)
                             .height(ch)
                             .stretch(Stretch::Uniform)
@@ -578,7 +599,7 @@ impl Launcher {
                         .background(ThemeBrush::CardStroke)
                         .content(
                             TextBlock::new()
-                                .text(tf!("无法显示\n{}", "Cannot display\n{}", reason))
+                                .text(t!("page_cards.cannot_display", reason = reason).to_string())
                                 .font_size(11.0)
                                 .opacity(0.85)
                                 .text_wrapping(TextWrapping::Wrap)
@@ -593,6 +614,41 @@ impl Launcher {
                 ),
             };
 
+        self.card_tile(context, index, card, content_view, (card_w, card_h))
+    }
+
+    fn wmmt3_card_item(&self, context: &mut ViewContext<Self>, index: usize, card: &CardEntry) -> View {
+        let content = match self.card_image(&card.path) {
+            Ok(image) => Border::new()
+                .background(Brush::Solid(Color::argb(255, 0xFA, 0xF8, 0xF2)))
+                .corner_radius(6.0)
+                .content(
+                    Image::new()
+                        .source_data(EncodedImage::new(image.bytes))
+                        .width(WMMT3_CARD_W)
+                        .height(WMMT3_CARD_H)
+                        .stretch(Stretch::Uniform),
+                )
+                .into(),
+            Err(_) => Grid::new()
+                .children((SymbolIcon::new()
+                    .symbol(Symbol::Contact)
+                    .horizontal_alignment(HorizontalAlignment::Center)
+                    .vertical_alignment(VerticalAlignment::Center),))
+                .into(),
+        };
+        self.card_tile(context, index, card, content, (WMMT3_CARD_W, WMMT3_CARD_H))
+    }
+
+    fn card_tile(
+        &self,
+        context: &mut ViewContext<Self>,
+        index: usize,
+        card: &CardEntry,
+        content_view: View,
+        (card_w, card_h): (f64, f64),
+    ) -> View {
+        let active = self.cards.active_index() == Some(index);
         let content_view: View = if active {
             let tint: View = Border::new()
                 .width(card_w)
@@ -622,8 +678,9 @@ impl Launcher {
 
         let name_label: View = if active {
             TextBlock::new()
-                .text(tf!("{}（当前使用）", "{} (in use)", card.name))
+                .text(t!("page_cards.name_in_use", name = card.name).to_string())
                 .font_size(12.0)
+                .text_trimming(TextTrimming::CharacterEllipsis)
                 .font_weight(FontWeight::SEMI_BOLD)
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .into()
@@ -631,6 +688,7 @@ impl Launcher {
             TextBlock::new()
                 .text(card.name.clone())
                 .font_size(12.0)
+                .text_trimming(TextTrimming::CharacterEllipsis)
                 .opacity(0.7)
                 .horizontal_alignment(HorizontalAlignment::Center)
                 .into()
@@ -643,82 +701,123 @@ impl Launcher {
             .into()
     }
 
-    pub(in crate::reactor_app) fn enter_cards(&mut self, index: usize, context: &ComponentContext<Self>) {
-        let Some(rec) = self.library.games.get(index) else {
+    pub(in crate::reactor_app) fn selected_card(&self, game: &GameRecord) -> Option<String> {
+        game.card.clone().or_else(|| match family_of(game).card_kind(game) {
+            CardKind::Wmmt3 => None,
+            _ => self.store.load_card(),
+        })
+    }
+
+    fn card_game(&self) -> Option<&GameRecord> {
+        self.library.games.get(self.cards_game?)
+    }
+
+    pub(in crate::reactor_app) fn is_current_card_page(&self, seq: u32) -> bool {
+        self.nav_tag == "cards" && seq == self.card_enter_seq
+    }
+
+    pub(in crate::reactor_app) fn select_card(&mut self, name: String) {
+        let Some(game) = self.cards_game.and_then(|index| self.library.games.get_mut(index)) else {
+            self.dialog = Dialog::Error {
+                message: t!("app.failed_to_save_card_selection").to_string(),
+            };
             return;
         };
-        let path = PathBuf::from(&rec.path);
+        game.card = Some(name.clone());
+        self.store.save_library(&self.library);
+        self.cards.active = Some(name);
+    }
+
+    pub(in crate::reactor_app) fn select_blank_card(&mut self) {
+        let Some(game) = self.card_game() else {
+            return;
+        };
+        let name = match self.card_kind {
+            CardKind::Wmmt3 => {
+                let Some(reader) = BuiltInCardReader::load(&game_dir_of(game)) else {
+                    self.dialog = Dialog::Error {
+                        message: t!("page_cards.wmmt3_external_reader").to_string(),
+                    };
+                    return;
+                };
+                reader.new_card_name()
+            }
+            CardKind::Aime => return,
+            _ => cards::blank_card_name(),
+        };
+        self.select_card(name);
+    }
+
+    pub(in crate::reactor_app) fn enter_cards(
+        &mut self,
+        index: usize,
+        context: &ComponentContext<Self>,
+    ) {
+        let Some(game) = self.library.games.get(index) else {
+            return;
+        };
+        let path = PathBuf::from(&game.path);
+        let kind = family_of(game).card_kind(game);
+        let include_wmmt2_cards = wmmt3::takes_over_wmmt2_cards(game);
+        let wmmt3_reader = if kind == CardKind::Wmmt3 {
+            let Some(reader) = BuiltInCardReader::load(&game_dir_of(game)) else {
+                self.dialog = Dialog::Error {
+                    message: t!("page_cards.wmmt3_external_reader").to_string(),
+                };
+                return;
+            };
+            Some(reader)
+        } else {
+            None
+        };
+
         self.cards_game = Some(index);
+        self.card_kind = kind;
         self.nav_tag = "cards".to_string();
         self.card_slide = 0.0;
         self.card_enter_seq += 1;
+        let seq = self.card_enter_seq;
         self.cards = CardScan::default();
 
-        self.compose_cache.borrow_mut().clear();
+        self.card_image_cache.borrow_mut().clear();
         *self.base_cache.borrow_mut() = None;
 
         self.cards_loading = true;
         self.cards_warm = 0;
 
-        self.cards_aime = rec.loader == Loader::Segatools
-            && matches!(rec.game_id.as_deref(), Some("SDDF") | Some("SDER") | Some("SDGT"));
-
-        self.cards_id4 = rec.loader == Loader::Kitten
-            && matches!(rec.game_id.as_deref(), Some("SBML"));
-
-        self.cards_id6 = rec.loader == Loader::Mice
-            && matches!(rec.game_id.as_deref(), Some("SBUU") | Some("SBVW") | Some("SBWV"));
-
-        self.cards_id8 = rec.loader == Loader::Mice
-            && matches!(rec.game_id.as_deref(), Some("SBZZ") | Some("SDAL"));
-        if self.cards_aime {
-            let dir = self.aime_device_dir();
-            context.spawn_background(move |_| {
-                let scan = match dir {
-                    Some(d) => cards::scan_aime_cards_in(&d),
-                    None => CardScan::default(),
-                };
-                Message::CardsScanned(Box::new(scan))
-            });
-        } else {
-            context
-                .spawn_background(move |_| Message::CardsScanned(Box::new(cards::scan_cards(&path))));
-        }
+        let aime_dir = self.aime_device_dir();
+        context.spawn_background(move |_| {
+            let scan = match (kind, wmmt3_reader) {
+                (_, Some(reader)) => reader.scan(include_wmmt2_cards),
+                (CardKind::Aime, None) => {
+                    aime_dir.map_or_else(CardScan::default, |dir| cards::scan_aime_cards_in(&dir))
+                }
+                (_, None) => cards::scan_cards(&path),
+            };
+            Message::CardsScanned(seq, Box::new(scan))
+        });
     }
 
-    pub(in crate::reactor_app) fn apply_cards_scanned(&mut self, mut scan: Box<CardScan>, context: &ComponentContext<Self>) {
+    pub(in crate::reactor_app) fn apply_cards_scanned(
+        &mut self,
+        mut scan: CardScan,
+        context: &ComponentContext<Self>,
+    ) {
+        let selected = self.card_game().and_then(|game| self.selected_card(game));
+        scan.active = selected.or(scan.active);
+        self.cards = scan;
 
-        scan.active = self
-            .cards_game
-            .and_then(|gi| self.library.games.get(gi))
-            .and_then(|rec| rec.card.clone())
-            .or_else(|| self.store.load_card());
-        self.cards = *scan;
-
-        if !self.cards_aime
+        if !matches!(self.card_kind, CardKind::Aime | CardKind::Wmmt3)
             && self.cards.cards.is_empty()
             && self.cards.active.is_none()
         {
-            let name = cards::blank_card_name();
-            if let Some(gi) = self.cards_game {
-                if let Some(rec) = self.library.games.get_mut(gi) {
-                    rec.card = Some(name.clone());
-                    self.store.save_library(&self.library);
-                }
-            }
-            self.cards.active = Some(name);
+            self.select_card(cards::blank_card_name());
         }
-        if self.cards_aime {
 
-            self.cards_loading = false;
-        } else {
-
-            self.cards_loading = true;
-            self.cards_warm = 0;
-            context.spawn_background(|_| {
-                std::thread::sleep(Duration::from_millis(30));
-                Message::CardsLoadTick
-            });
+        self.cards_loading = self.card_kind != CardKind::Aime && !self.cards.cards.is_empty();
+        self.cards_warm = 0;
+        if self.cards_loading {
+            self.schedule_card_cache_tick(context, Duration::from_millis(30));
         }
     }
 
@@ -731,32 +830,46 @@ impl Launcher {
         let end = (self.cards_warm + 2).min(len);
         for i in self.cards_warm..end {
             let path = self.cards.cards[i].path.clone();
-            let _ = self.compose_card_image(&path, self.dpi_scale);
+            let _ = self.card_image(&path);
         }
         self.cards_warm = end;
         if end >= len {
             self.cards_loading = false;
         } else {
-            context.spawn_background(|_| {
-                std::thread::sleep(Duration::from_millis(1));
-                Message::CardsLoadTick
-            });
+            self.schedule_card_cache_tick(context, Duration::from_millis(1));
         }
     }
 
-    pub(in crate::reactor_app) fn reload_aime_cards(&mut self, _code: String) {
+    fn schedule_card_cache_tick(&self, context: &ComponentContext<Self>, delay: Duration) {
+        let seq = self.card_enter_seq;
+        context.spawn_background(move |_| {
+            std::thread::sleep(delay);
+            Message::CardsLoadTick(seq)
+        });
+    }
+
+    pub(in crate::reactor_app) fn reload_aime_cards(&mut self) {
         let mut scan = match self.aime_device_dir() {
             Some(d) => cards::scan_aime_cards_in(&d),
             None => CardScan::default(),
         };
 
-        scan.active = self
-            .cards_game
-            .and_then(|gi| self.library.games.get(gi))
-            .and_then(|rec| rec.card.clone())
-            .or_else(|| self.store.load_card());
+        scan.active = self.card_game().and_then(|game| self.selected_card(game));
         self.cards = scan;
     }
+}
+
+fn load_wmmt3_card_image(card_path: &Path) -> Result<CardImage, String> {
+    let mut preview = card_path.as_os_str().to_os_string();
+    preview.push(".png");
+    let bytes = std::fs::read(preview).map_err(|error| error.to_string())?;
+    let reader = image::ImageReader::with_format(Cursor::new(&bytes), image::ImageFormat::Png);
+    let (width, height) = reader.into_dimensions().map_err(|error| error.to_string())?;
+    Ok(CardImage {
+        bytes: bytes.into(),
+        width: f64::from(width),
+        height: f64::from(height),
+    })
 }
 
 #[cfg(test)]
@@ -765,30 +878,30 @@ mod tests {
 
     #[test]
     fn builtin_card_base_matches_constants() {
-        let img = image::load_from_memory(CARD_BASE_PNG).expect("内置底图应能解码");
-        assert_eq!(img.width(), CARD_BASE_W as u32, "底图宽度与常量不符");
-        assert_eq!(img.height(), CARD_BASE_H as u32, "底图高度与常量不符");
+        let img = image::load_from_memory(CARD_BASE_PNG).expect("the built-in base image should decode");
+        assert_eq!(img.width(), CARD_BASE_W as u32, "the base image width does not match the constant");
+        assert_eq!(img.height(), CARD_BASE_H as u32, "the base image height does not match the constant");
     }
 
     #[test]
     fn id8_card_base_matches_constants() {
-        let img = image::load_from_memory(ID8_BASE_PNG).expect("ID8 底图应能解码");
-        assert_eq!(img.width(), ID8_BASE_W as u32, "ID8 底图宽度与常量不符");
-        assert_eq!(img.height(), ID8_BASE_H as u32, "ID8 底图高度与常量不符");
+        let img = image::load_from_memory(ID8_BASE_PNG).expect("the ID8 base image should decode");
+        assert_eq!(img.width(), ID8_BASE_W as u32, "the ID8 base image width does not match the constant");
+        assert_eq!(img.height(), ID8_BASE_H as u32, "the ID8 base image height does not match the constant");
     }
 
     #[test]
     fn id4_card_base_matches_constants() {
-        let img = image::load_from_memory(ID4_BASE_PNG).expect("ID4 底图应能解码");
-        assert_eq!(img.width(), ID4_BASE_W as u32, "ID4 底图宽度与常量不符");
-        assert_eq!(img.height(), ID4_BASE_H as u32, "ID4 底图高度与常量不符");
+        let img = image::load_from_memory(ID4_BASE_PNG).expect("the ID4 base image should decode");
+        assert_eq!(img.width(), ID4_BASE_W as u32, "the ID4 base image width does not match the constant");
+        assert_eq!(img.height(), ID4_BASE_H as u32, "the ID4 base image height does not match the constant");
     }
 
     #[test]
     fn id6_card_base_matches_constants() {
-        let img = image::load_from_memory(ID6_BASE_PNG).expect("ID6 底图应能解码");
-        assert_eq!(img.width(), ID6_BASE_W as u32, "ID6 底图宽度与常量不符");
-        assert_eq!(img.height(), ID6_BASE_H as u32, "ID6 底图高度与常量不符");
+        let img = image::load_from_memory(ID6_BASE_PNG).expect("the ID6 base image should decode");
+        assert_eq!(img.width(), ID6_BASE_W as u32, "the ID6 base image width does not match the constant");
+        assert_eq!(img.height(), ID6_BASE_H as u32, "the ID6 base image height does not match the constant");
     }
 
     #[test]
@@ -796,7 +909,7 @@ mod tests {
         for name in crate::db::cover_images() {
             assert!(
                 Launcher::builtin_cover_bytes(&name).is_some(),
-                "games_db.json 引用了封面 {name}，但 COVER_ASSETS 未登记该图片"
+                "games_db.json refers to the cover {name}, but COVER_ASSETS does not list that image"
             );
         }
     }

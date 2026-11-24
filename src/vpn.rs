@@ -14,8 +14,7 @@ use windows::Win32::System::JobObjects::{
 };
 
 use crate::storage::VpnConfig;
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VpnStatus {
@@ -88,17 +87,14 @@ impl VpnManager {
     ) -> Result<VpnHandle, String> {
         let exe = Self::openvpn_path(cfg);
         if !exe.is_file() {
-            return Err(tf!("找不到 openvpn.exe：{}\n（请将 openvpn.exe 放入 tools/openvpn/，或在 config.ini 的 [vpn] 设置 openvpn= 绝对路径）",
-                   "openvpn.exe not found: {}\n(Put openvpn.exe under tools/openvpn/, or set openvpn= absolute path in config.ini [vpn])",
-                exe.display()
-            ));
+            return Err(t!("vpn.openvpn_exe_not_found", exe = exe.display()).to_string());
         }
         let config = match &cfg.config_path {
             Some(c) => PathBuf::from(c),
-            None => return Err(t!("未配置 VPN（缺少 .ovpn 文件）", "VPN not configured (missing .ovpn file)").to_string()),
+            None => return Err(t!("vpn.vpn_not_configured").to_string()),
         };
         if !config.is_file() {
-            return Err(tf!("VPN 配置文件不存在：{}", "VPN config file does not exist: {}", config.display()));
+            return Err(t!("vpn.vpn_config_file_does_not", config = config.display()).to_string());
         }
 
         let passfile = passphrase
@@ -107,9 +103,9 @@ impl VpnManager {
                 let tmp =
                     std::env::temp_dir().join(format!("dnet-vpn-{}.tmp", std::process::id()));
                 let mut f = fs::File::create(&tmp)
-                    .map_err(|e| tf!("创建临时密码文件失败：{e}", "Failed to create temporary password file: {e}"))?;
-                writeln!(f, "{p}").map_err(|e| tf!("写入临时密码失败：{e}", "Failed to write temporary password: {e}"))?;
-                writeln!(f, "{p}").map_err(|e| tf!("写入临时密码失败：{e}", "Failed to write temporary password: {e}"))?;
+                    .map_err(|e| t!("vpn.failed_to_create_temporary_password", error = e).to_string())?;
+                writeln!(f, "{p}").map_err(|e| t!("vpn.failed_to_write_temporary_password", error = e).to_string())?;
+                writeln!(f, "{p}").map_err(|e| t!("vpn.failed_to_write_temporary_password", error = e).to_string())?;
                 Ok::<_, String>(tmp)
             })
             .transpose()?;
@@ -126,7 +122,7 @@ impl VpnManager {
         };
         drivers.push(None);
 
-        let mut last_err = t!("VPN 连接失败", "VPN connection failed").to_string();
+        let mut last_err = t!("vpn.connection_failed").to_string();
         for driver in &drivers {
             match Self::try_connect_once(&exe, &config, &passfile, *driver, timeout) {
                 Ok(handle) => {
@@ -198,13 +194,13 @@ impl VpnManager {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| tf!("启动 openvpn 失败（{}）：{e}", "Failed to start openvpn ({}): {e}", exe.display()))?;
+            .map_err(|e| t!("vpn.failed_to_start_openvpn", exe = exe.display(), error = e).to_string())?;
 
         let job = attach_job(&child);
 
         let deadline = Instant::now() + timeout;
         let marker = "initialization sequence completed";
-        let driver_label = driver.unwrap_or(t!("默认", "Default"));
+        let driver_label = driver.map_or_else(|| t!("vpn.default").to_string(), str::to_string);
 
         let mut log_lines: Vec<String> = Vec::new();
         let mut log_offset: u64 = 0;
@@ -217,8 +213,7 @@ impl VpnManager {
                 let _ = child.wait();
                 close_job(job);
                 let _ = fs::remove_file(&logfile);
-                return Err(append_wintun_hint(&tf!("VPN 连接失败（驱动 {driver_label}）：{detail}", "VPN connection failed (driver {driver_label}): {detail}"
-                )));
+                return Err(append_wintun_hint(&t!("vpn.connection_failed_with_driver", driver_label = driver_label, detail = detail).to_string()));
             }
 
             {
@@ -232,8 +227,7 @@ impl VpnManager {
                         let _ = child.wait();
                         close_job(job);
                         let _ = fs::remove_file(&logfile);
-                        return Err(append_wintun_hint(&tf!("VPN 连接失败（驱动 {driver_label}）：{detail}", "VPN connection failed (driver {driver_label}): {detail}"
-                        )));
+                        return Err(append_wintun_hint(&t!("vpn.connection_failed_with_driver", driver_label = driver_label, detail = detail).to_string()));
                     }
 
                     return Ok(VpnHandle {
@@ -252,9 +246,7 @@ impl VpnManager {
                 let _ = child.wait();
                 close_job(job);
                 let _ = fs::remove_file(&logfile);
-                return Err(append_wintun_hint(&tf!("连接超时（{} 秒，驱动 {driver_label}）：{detail}", "Connection timed out ({} seconds, driver {driver_label}): {detail}",
-                    timeout.as_secs()
-                )));
+                return Err(append_wintun_hint(&t!("vpn.connection_timed_out", timeout = timeout.as_secs(), driver_label = driver_label, detail = detail).to_string()));
             }
 
             std::thread::sleep(Duration::from_millis(150));
@@ -360,7 +352,7 @@ pub(crate) fn close_job(job: Option<usize>) {
 fn build_detail(log: &[String]) -> String {
     extract_error_line(log)
         .or_else(|| log.iter().rev().find(|l| !l.trim().is_empty()).cloned())
-        .unwrap_or_else(|| t!("openvpn 未输出明确错误信息", "openvpn did not output a clear error message").to_string())
+        .unwrap_or_else(|| t!("vpn.openvpn_did_not_output_clear").to_string())
         .trim()
         .to_string()
 }
@@ -394,7 +386,7 @@ fn extract_error_line(log: &[String]) -> Option<String> {
 
 fn append_wintun_hint(msg: &str) -> String {
     if msg.to_lowercase().contains("wintun") {
-        format!("{msg}\n{}", t!("（请确认 wintun.dll 已放在 openvpn.exe 同目录）", "(Make sure wintun.dll is placed next to openvpn.exe)"))
+        format!("{msg}\n{}", t!("vpn.make_sure_wintun_dll"))
     } else {
         msg.to_string()
     }
@@ -436,7 +428,7 @@ mod tests {
     fn wintun_hint_appended_only_for_wintun_errors() {
         let with = append_wintun_hint("Cannot open Wintun adapter");
         assert!(with.starts_with("Cannot open Wintun adapter"));
-        assert!(with.contains("wintun.dll"), "wintun 相关错误应补提示：{with}");
+        assert!(with.contains("wintun.dll"), "a wintun error should get the hint: {with}");
 
         assert_eq!(append_wintun_hint("AUTH_FAILED"), "AUTH_FAILED");
     }

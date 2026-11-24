@@ -1,8 +1,9 @@
 use std::fs;
 use std::path::Path;
 
-use crate::tf;
-use crate::render_util::{bool_str, copy_tool_files, deadzone_value, push_xi_button, Sections, split_resolution};
+use rust_i18n::t;
+
+use super::render_util::{bool_str, copy_tool_files, deadzone_value, push_xi_button, Sections, split_resolution};
 use crate::storage::{
     CoinConfig, DPAD_CODE_BASE, GraphicsConfig, InputConfig, INPUT_RATIO_DEFAULT, NetworkConfig,
     SystemConfig,
@@ -383,21 +384,17 @@ pub fn deploy(
     target: MiceTarget,
 ) -> Result<(), String> {
     if !dir.is_dir() {
-        return Err(tf!("目标目录不存在：{}", "Target directory does not exist: {}", dir.display()));
+        return Err(t!("mice.target_directory_does_not_exist", dir = dir.display()).to_string());
     }
     if !tool_dir.is_dir() {
-        return Err(tf!("mice 工具目录不存在：{}", "mice tool directory does not exist: {}", tool_dir.display()));
+        return Err(t!("mice.mice_tool_directory_does_not", tool_dir = tool_dir.display()).to_string());
     }
 
     copy_tool_files(tool_dir, dir, EXCLUDE_FILES, "mice")?;
 
     let cfg_dir = dir.join("mice");
     fs::create_dir_all(&cfg_dir).map_err(|e| {
-        tf!(
-            "创建 mice 配置目录失败（{}）：{e}",
-            "Failed to create mice config directory ({}): {e}",
-            cfg_dir.display()
-        )
+        t!("mice.failed_to_create_mice_config", cfg_dir = cfg_dir.display(), error = e).to_string()
     })?;
     write_atomic(&cfg_dir.join("config.ini"), &render_config(dep, target))?;
     write_atomic(&cfg_dir.join("idas.ini"), &render_idas(dep))?;
@@ -410,19 +407,11 @@ pub(crate) fn write_atomic(target: &Path, text: &str) -> Result<(), String> {
     }
     let tmp = target.with_extension("ini.tmp");
     fs::write(&tmp, text).map_err(|e| {
-        tf!(
-            "写入临时配置失败（{}）：{e}",
-            "Failed to write temporary config ({}): {e}",
-            tmp.display()
-        )
+        t!("mice.failed_to_write_temporary_config", tmp = tmp.display(), error = e).to_string()
     })?;
     fs::rename(&tmp, target).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        tf!(
-            "替换配置失败（{}）：{e}",
-            "Failed to replace config ({}): {e}",
-            target.display()
-        )
+        t!("mice.failed_to_replace_config", target = target.display(), error = e).to_string()
     })
 }
 
@@ -494,7 +483,7 @@ mod tests {
     #[test]
     fn render_config_ffb_default_and_custom() {
         let text = render_config(&snapshot(), MiceTarget::Game);
-        assert!(text.contains("[ffb]"), "config.ini 应写 [ffb] 力反馈段");
+        assert!(text.contains("[ffb]"), "config.ini should write the [ffb] force feedback section");
         assert!(text.contains("enable = true"));
         assert!(text.contains("constantForceStrength = 100"));
         assert!(text.contains("damperStrength = 100"));
@@ -650,7 +639,7 @@ mod tests {
             let text = render_idas(&dep);
             assert!(
                 text.contains(&format!("skipInitialization = {want}")),
-                "skip_reader_init={skip:?} 时应写 skipInitialization = {want}：\n{text}"
+                "skip_reader_init={skip:?} should write skipInitialization = {want}:\n{text}"
             );
         }
     }
@@ -664,11 +653,11 @@ mod tests {
             let text = render_idas(&dep);
             assert!(
                 text.contains("offlineMode = false"),
-                "simulate={sim:?} 时应写 offlineMode = false：\n{text}"
+                "simulate={sim:?} should write offlineMode = false:\n{text}"
             );
             assert!(
                 text.contains(&format!("simulateNetwork = {sim_net}")),
-                "simulate={sim:?} 时应写 simulateNetwork = {sim_net}：\n{text}"
+                "simulate={sim:?} should write simulateNetwork = {sim_net}:\n{text}"
             );
         }
     }
@@ -689,7 +678,7 @@ mod tests {
             let text = render_idas(&dep);
             match want {
                 Some(n) => assert!(text.contains(&format!("render_scale = {n}"))),
-                None => assert!(!text.contains("render_scale"), "{raw} 不应写出"),
+                None => assert!(!text.contains("render_scale"), "{raw} should not be written"),
             }
         }
 
@@ -714,7 +703,7 @@ mod tests {
 
         assert!(text.contains("leftStickDeadzone = 6553"));
         assert!(text.contains("rightStickDeadzone = 6553"));
-        assert!(!text.contains("[dinput]"), "xinput 模式不写 dinput 节");
+        assert!(!text.contains("[dinput]"), "xinput mode does not write the dinput section");
 
         let mut dep2 = snapshot();
         dep2.input.kind = Some("dinput".into());
@@ -743,7 +732,7 @@ mod tests {
 
         assert!(text2.contains("reverseAccelAxis = false"));
         assert!(text2.contains("reverseBrakeAxis = false"));
-        assert!(!text2.contains("[xinput]"), "dinput 模式不写 xinput 节");
+        assert!(!text2.contains("[xinput]"), "dinput mode does not write the xinput section");
     }
 
     #[test]
@@ -765,8 +754,8 @@ mod tests {
         dep2.input.up_button = Some(DPAD_CODE_BASE + 1);
         dep2.input.left_button = Some(DPAD_CODE_BASE + 4);
         let text2 = render_idas(&dep2);
-        assert!(!text2.contains("up = "), "十字键伪码不应写入 dinput");
-        assert!(!text2.contains("left = "), "十字键伪码不应写入 dinput");
+        assert!(!text2.contains("up = "), "D-pad pseudo codes should not be written to dinput");
+        assert!(!text2.contains("left = "), "D-pad pseudo codes should not be written to dinput");
     }
 
     #[test]
@@ -802,8 +791,8 @@ mod tests {
         assert!(!text2.contains("viewChg ="));
         assert!(text2.contains("coin = Y"));
         assert!(text2.contains("card = START"));
-        assert!(text2.contains("accel = RT"), "油门源应写捕获的按钮名");
-        assert!(text2.contains("brake = LT"), "刹车源应写捕获的按钮名");
+        assert!(text2.contains("accel = RT"), "the throttle should be the captured button name");
+        assert!(text2.contains("brake = LT"), "the brake should be the captured button name");
 
         assert!(!text2.contains("up ="));
 
@@ -857,7 +846,7 @@ mod tests {
 
         assert_eq!(fs::read(game.join("mice.exe")).unwrap(), b"mice-bin");
         assert_eq!(fs::read(game.join("mice.dll")).unwrap(), b"dll-bin");
-        assert!(!game.join("config.ini").exists(), "不应复制工具自带 config.ini");
+        assert!(!game.join("config.ini").exists(), "the tool's own config.ini should not be copied");
         assert!(!game.join("idas.ini").exists());
         assert!(!game.join("mice.log").exists());
         assert!(!game.join("sram.bin").exists());
@@ -880,7 +869,7 @@ mod tests {
             .unwrap()
             .modified()
             .unwrap();
-        assert_eq!(mtime_before, mtime_after, "内容一致不应重写配置");
+        assert_eq!(mtime_before, mtime_after, "an unchanged config should not be rewritten");
     }
 
     #[test]
@@ -907,11 +896,12 @@ mod tests {
         fs::write(tool.join("mice.exe"), "x").unwrap();
 
         let err = mice_deploy(&game, &tool, &snapshot()).unwrap_err();
-        assert!(err.contains("目标目录不存在"), "{err}");
+        assert_eq!(err, t!("mice.target_directory_does_not_exist", dir = game.display()));
 
         fs::create_dir_all(&game).unwrap();
-        let err = mice_deploy(&game, &tmp.0.join("nope"), &snapshot()).unwrap_err();
-        assert!(err.contains("工具目录不存在"), "{err}");
+        let missing_tool = tmp.0.join("nope");
+        let err = mice_deploy(&game, &missing_tool, &snapshot()).unwrap_err();
+        assert_eq!(err, t!("mice.mice_tool_directory_does_not", tool_dir = missing_tool.display()));
     }
 
     fn mice_deploy(
@@ -934,7 +924,7 @@ mod tests {
         let text = render_idas(&dep);
         assert!(
             text.contains("[CardReader]\nauto_insert = false\ncardfile = InidCrd12345.png"),
-            "cardfile 应并入既有 [CardReader] 节：\n{text}"
+            "cardfile should join the existing [CardReader] section:\n{text}"
         );
     }
 
@@ -946,7 +936,7 @@ mod tests {
             let text = render_idas(&dep);
             assert!(
                 text.contains(&format!("auto_insert = {want}")),
-                "auto_insert_card={v:?} 时应写 auto_insert = {want}：\n{text}"
+                "auto_insert_card={v:?} should write auto_insert = {want}:\n{text}"
             );
         }
     }
@@ -958,7 +948,7 @@ mod tests {
         let text = render_config(&dep, MiceTarget::Game);
         assert!(text.contains("naominet_jp = my.server.net"));
         assert!(text.contains("aime_naominet_jp = my.server.net"));
-        assert!(!text.contains("sdgt.arcadehub.xyz"), "自定义服务器时不再写默认域名");
+        assert!(!text.contains("sdgt.arcadehub.xyz"), "with a custom server the default domain is not written");
     }
 
     #[test]
@@ -973,13 +963,13 @@ mod tests {
         let text = render_idas(&dep);
         assert!(
             text.contains("bind_ip = 192.168.100.101"),
-            "应写出 [ServerBox] bind_ip：\n{text}"
+            "[ServerBox] bind_ip should be written:\n{text}"
         );
         assert!(
             text.find("bind_ip = 192.168.100.101").unwrap() > text.find("[ServerBox]").unwrap(),
-            "bind_ip 必须位于 [ServerBox] 节内：\n{text}"
+            "bind_ip must be inside the [ServerBox] section:\n{text}"
         );
-        assert!(!text.contains("[serverbox]"), "不应出现独立的 [serverbox] 节");
+        assert!(!text.contains("[serverbox]"), "there should be no separate [serverbox] section");
     }
 
     #[test]
@@ -992,23 +982,23 @@ mod tests {
         dep.net.host_ip = Some("  192.168.100.50  ".into());
         assert!(
             !render_idas(&dep).contains("game_ip"),
-            "模拟网络开启时不应写 game_ip"
+            "game_ip should not be written while the network is simulated"
         );
         dep.net.simulate = Some(true);
         assert!(
             !render_idas(&dep).contains("game_ip"),
-            "模拟网络开启时不应写 game_ip"
+            "game_ip should not be written while the network is simulated"
         );
 
         dep.net.simulate = Some(false);
         let text = render_idas(&dep);
         assert!(
             text.contains("game_ip = 192.168.100.50"),
-            "应写出 [ServerBox] game_ip：\n{text}"
+            "[ServerBox] game_ip should be written:\n{text}"
         );
         assert!(
             text.find("game_ip = 192.168.100.50").unwrap() > text.find("[ServerBox]").unwrap(),
-            "game_ip 必须位于 [ServerBox] 节内：\n{text}"
+            "game_ip must be inside the [ServerBox] section:\n{text}"
         );
     }
 
@@ -1020,7 +1010,7 @@ mod tests {
         dep.net.serverbox_ip = Some("192.168.100.101".into());
         assert!(
             !render_config(&dep, MiceTarget::Game).contains("[ServerBox]"),
-            "Game 目标的 config.ini 不应含 [ServerBox]"
+            "the config.ini of the Game target should not contain [ServerBox]"
         );
 
         let mut dep = snapshot();
@@ -1029,7 +1019,7 @@ mod tests {
         let text = render_config(&dep, MiceTarget::ServerBox);
         assert!(
             text.contains("[ServerBox]\nbind_ip = 192.168.100.101\n"),
-            "ServerBox 的 config.ini 应写出 [ServerBox] bind_ip：\n{text}"
+            "the ServerBox config.ini should write [ServerBox] bind_ip:\n{text}"
         );
 
         let text = render_config(&snapshot(), MiceTarget::ServerBox);
@@ -1041,7 +1031,7 @@ mod tests {
             dep.net.serverbox_ip = Some("192.168.100.101".into());
             assert!(
                 !render_config(&dep, MiceTarget::ServerBox).contains("[ServerBox]"),
-                "simulate={sim:?} 时不应写 [ServerBox]"
+                "simulate={sim:?} should not write [ServerBox]"
             );
         }
     }

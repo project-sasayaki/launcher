@@ -2,11 +2,11 @@ use windows_reactor::*;
 
 use crate::detect::FileKind;
 use crate::filedialog;
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 use crate::storage::{GameRecord, Loader};
 
 use crate::reactor_app::Launcher;
+use super::game_settings::SettingsTab;
 use super::input::INPUT_CAPTURE_SECS;
 use crate::reactor_app::message::{CompanionKind, Dialog, Message};
 use crate::reactor_app::state::PendingAdd;
@@ -18,15 +18,15 @@ impl Launcher {
         match &self.dialog {
             Dialog::None => StackPanel::new().into(),
             Dialog::Naming { name } => ContentDialog::new()
-                .title(t!("添加游戏", "Add Game"))
-                .primary_button_text(t!("添加", "Add"))
-                .close_button_text(t!("取消", "Cancel"))
+                .title(t!("page_dialog.add_game"))
+                .primary_button_text(t!("common.add"))
+                .close_button_text(t!("common.cancel"))
                 .is_open(true)
                 .on_closed(context.callback(Message::DialogClosed))
                 .content(
                     StackPanel::new().spacing(8.0).children((
                         TextBlock::new()
-                            .text(t!("未能自动识别该游戏（CRC 未命中），请输入名称：", "Could not auto-identify this game (CRC not matched). Enter a name:"))
+                            .text(t!("page_dialog.could_not_auto_identify_this"))
                             .opacity(0.7)
                             .text_wrapping(TextWrapping::Wrap),
                         TextBox::new()
@@ -36,39 +36,36 @@ impl Launcher {
                 )
                 .into(),
             Dialog::ConfirmRemove { name, .. } => ContentDialog::new()
-                .title(t!("移除游戏", "Remove Game"))
-                .primary_button_text(t!("移除", "Remove"))
-                .close_button_text(t!("取消", "Cancel"))
+                .title(t!("page_dialog.remove_game"))
+                .primary_button_text(t!("common.remove"))
+                .close_button_text(t!("common.cancel"))
                 .is_open(true)
                 .on_closed(context.callback(Message::DialogClosed))
                 .content(
                     StackPanel::new().spacing(8.0).children((
                         TextBlock::new()
-                            .text(tf!("确认从游戏库移除「{}」？", "Remove \"{}\" from the game library?", name))
+                            .text(t!("page_dialog.remove_from_game_library", name = name).to_string())
                             .text_wrapping(TextWrapping::Wrap),
                         TextBlock::new()
-                            .text(t!("该游戏的封面与配置将一并清除，此操作不可撤销。", "The game's cover and settings will be removed too. This cannot be undone."))
+                            .text(t!("page_dialog.game_s_cover_and_settings"))
                             .opacity(0.6)
                             .font_size(12.0)
                             .text_wrapping(TextWrapping::Wrap),
                     )),
                 )
                 .into(),
-            Dialog::InputCapture { label, .. } => {
+            Dialog::InputCapture { label_key, .. } => {
                 let remain = self.input_capture_remain.clamp(0.0, 1.0);
                 let secs = (remain * INPUT_CAPTURE_SECS).ceil() as u32;
                 ContentDialog::new()
-                    .title(t!("请按下按键", "Press the button"))
-                    .close_button_text(t!("取消", "Cancel"))
+                    .title(t!("page_dialog.press_button"))
+                    .close_button_text(t!("common.cancel"))
                     .is_open(true)
                     .on_closed(context.callback(Message::DialogClosed))
                     .content(
                         StackPanel::new().spacing(10.0).children((
                             TextBlock::new()
-                                .text(tf!(
-                                    "请在设备上按下「{}」对应的按键，或推动十字键（方向键）", "Press the button for \"{}\" on the device, or move the D-pad (arrow keys)",
-                                    label
-                                ))
+                                .text(t!("page_dialog.press_button_for_on_device", label = t!(*label_key)).to_string())
                                 .text_wrapping(TextWrapping::Wrap),
 
                             ProgressBar::new()
@@ -77,7 +74,7 @@ impl Launcher {
                                 .maximum(100.0)
                                 .value(remain * 100.0),
                             TextBlock::new()
-                                .text(tf!("剩余 {} 秒，未按下将自动关闭", "{}s remaining; auto-closes if no key is pressed", secs))
+                                .text(t!("page_dialog.s_remaining", secs = secs).to_string())
                                 .font_size(12.0)
                                 .opacity(0.6),
                         )),
@@ -86,39 +83,43 @@ impl Launcher {
             }
             Dialog::DeviceDiagnostics { text } => {
                 let body = if text.is_empty() {
-                    t!("尚无扫描结果：请先点右上角「扫描设备」再打开此窗口。", "No scan result yet: click \"Scan\" at top right first.")
+                    t!("page_dialog.no_scan_result_yet")
                         .to_string()
                 } else {
                     text.clone()
                 };
                 ContentDialog::new()
-                    .title(t!("设备名诊断", "Device name diagnostics"))
-                    .primary_button_text(t!("知道了", "OK"))
+                    .title(t!("page_dialog.device_name_diagnostics"))
+                    .primary_button_text(t!("common.ok"))
                     .is_open(true)
                     .on_closed(context.callback(Message::DialogClosed))
+                    // A TextBlock, not a TextBox: the report is only read (and copied), and a
+                    // TextBox breaks lines at '\r' only, so it showed the '\n'-separated
+                    // report as one line.
                     .content(
-
-                        TextBox::new()
-                            .text(body)
-                            .accepts_return(true)
+                        ScrollViewer::new()
+                            .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
                             .height(260.0)
-                            .min_width(520.0),
+                            .min_width(520.0)
+                            .content(
+                                TextBlock::new()
+                                    .text(body)
+                                    .text_wrapping(TextWrapping::Wrap)
+                                    .is_text_selection_enabled(true),
+                            ),
                     )
                     .into()
             }
             Dialog::UpdateAvailable { detail } => ContentDialog::new()
-                .title(t!("组件有可用更新", "Component updates available"))
-                .primary_button_text(t!("前往设置", "Go to settings"))
-                .close_button_text(t!("稍后", "Later"))
+                .title(t!("page_dialog.component_updates_available"))
+                .primary_button_text(t!("page_dialog.go_to_settings"))
+                .close_button_text(t!("page_dialog.later"))
                 .is_open(true)
                 .on_closed(context.callback(Message::DialogClosed))
                 .content(
                     StackPanel::new().spacing(8.0).children((
                         TextBlock::new()
-                            .text(t!(
-                                "以下组件有新版本，可前往「设置」页更新：",
-                                "The following components have new versions; go to Settings to update:"
-                            ))
+                            .text(t!("page_dialog.following_components_have_new_versions"))
                             .opacity(0.8),
                         TextBlock::new()
                             .text(detail.clone())
@@ -129,11 +130,11 @@ impl Launcher {
             Dialog::LaunchFailed { message, goto } => {
 
                 let (primary, close) = match goto {
-                    Some(_) => (t!("前往设置", "Go to settings"), Some(t!("取消", "Cancel"))),
-                    None => (t!("知道了", "OK"), None),
+                    Some(_) => (t!("page_dialog.go_to_settings"), Some(t!("common.cancel"))),
+                    None => (t!("common.ok"), None),
                 };
                 let dlg = ContentDialog::new()
-                    .title(t!("启动失败", "Launch failed"))
+                    .title(t!("page_dialog.launch_failed"))
                     .primary_button_text(primary)
                     .is_open(true)
                     .on_closed(context.callback(Message::DialogClosed));
@@ -155,28 +156,24 @@ impl Launcher {
             Dialog::RoomNickPrompt { pending } => {
                 let (action_hint, default_note) = match pending {
                     crate::reactor_app::message::PendingRoomAction::Create { .. } => (
-                        t!("创建房间", "create a room"),
-                        t!("跳过后本次将使用默认昵称 player1234", "Skip to use the default nickname player1234 this time"),
+                        t!("page_dialog.action_create_room"),
+                        t!("page_dialog.skip_to_use_default_nickname"),
                     ),
                     crate::reactor_app::message::PendingRoomAction::Join { .. } => (
-                        t!("加入房间", "join a room"),
-                        t!("跳过后本次将使用默认昵称 player1234", "Skip to use the default nickname player1234 this time"),
+                        t!("page_dialog.action_join_room"),
+                        t!("page_dialog.skip_to_use_default_nickname"),
                     ),
                 };
                 ContentDialog::new()
-                    .title(t!("未设置昵称", "Nickname not set"))
-                    .primary_button_text(t!("前往设置", "Go to settings"))
-                    .close_button_text(t!("跳过", "Skip"))
+                    .title(t!("page_dialog.nickname_not_set"))
+                    .primary_button_text(t!("page_dialog.go_to_settings"))
+                    .close_button_text(t!("page_dialog.skip"))
                     .is_open(true)
                     .on_closed(context.callback(Message::DialogClosed))
                     .content(
                         StackPanel::new().spacing(8.0).children((
                             TextBlock::new()
-                                .text(tf!(
-                                    "尚未设置房间昵称，房间内成员将无法辨认你。要现在前往「设置」页配置后再{0}吗？",
-                                    "No room nickname is set; other players cannot tell who you are. Go to Settings and set one now before you {0}?",
-                                    action_hint
-                                ))
+                                .text(t!("page_dialog.no_room_nickname_is_set", action_hint = action_hint).to_string())
                                 .text_wrapping(TextWrapping::Wrap),
                             TextBlock::new()
                                 .text(default_note)
@@ -188,8 +185,8 @@ impl Launcher {
                     .into()
             }
             Dialog::Error { message } => ContentDialog::new()
-                .title(t!("错误", "Error"))
-                .primary_button_text(t!("知道了", "OK"))
+                .title(t!("common.error"))
+                .primary_button_text(t!("common.ok"))
                 .is_open(true)
                 .on_closed(context.callback(Message::DialogClosed))
                 .content(
@@ -202,33 +199,33 @@ impl Launcher {
                 )
                 .into(),
             Dialog::RoomCreate { name, game, password } => {
-                let games = crate::db::game_names();
+                let games = crate::db::room_game_names();
                 ContentDialog::new()
-                    .title(t!("创建房间", "Create Room"))
-                    .primary_button_text(t!("创建", "Create"))
-                    .close_button_text(t!("取消", "Cancel"))
+                    .title(t!("page_dialog.create_room_title"))
+                    .primary_button_text(t!("page_dialog.create"))
+                    .close_button_text(t!("common.cancel"))
                     .is_open(true)
                     .on_closed(context.callback(Message::DialogClosed))
                     .content(
                         StackPanel::new().spacing(10.0).children((
                             TextBlock::new()
-                                .text(t!("玩的什么游戏", "Game"))
+                                .text(t!("page_dialog.game"))
                                 .opacity(0.7),
                             ComboBox::new()
                                 .width(320.0)
                                 .items_source(games)
                                 .selected_index(*game)
-                                .placeholder_text(t!("选择游戏", "Select a game"))
+                                .placeholder_text(t!("page_dialog.select_game"))
                                 .on_selection_changed(context.callback(Message::RoomCreateGameChanged))
                                 .vertical_alignment(VerticalAlignment::Center),
                             TextBlock::new()
-                                .text(t!("房间名", "Room name (shown in the public room list)"))
+                                .text(t!("page_dialog.room_name"))
                                 .opacity(0.7),
                             TextBox::new()
                                 .text(name.clone())
                                 .on_text_changed(context.callback(Message::RoomCreateNameChanged)),
                             TextBlock::new()
-                                .text(t!("密码（留空 = 公开房）", "Password (blank = public room)"))
+                                .text(t!("page_dialog.password_optional"))
                                 .opacity(0.7),
                             PasswordBox::new()
                                 .password(password.clone())
@@ -238,21 +235,21 @@ impl Launcher {
                     .into()
             }
             Dialog::RoomJoin { room_id, password } => ContentDialog::new()
-                .title(t!("加入房间", "Join Room"))
-                .primary_button_text(t!("加入", "Join"))
-                .close_button_text(t!("取消", "Cancel"))
+                .title(t!("page_dialog.join_room_title"))
+                .primary_button_text(t!("common.join"))
+                .close_button_text(t!("common.cancel"))
                 .is_open(true)
                 .on_closed(context.callback(Message::DialogClosed))
                 .content(
                     StackPanel::new().spacing(10.0).children((
                         TextBlock::new()
-                            .text(t!("房间 ID", "Room ID"))
+                            .text(t!("common.room_id"))
                             .opacity(0.7),
                         TextBox::new()
                             .text(room_id.clone())
                             .on_text_changed(context.callback(Message::RoomJoinIdChanged)),
                         TextBlock::new()
-                            .text(t!("密码", "Password"))
+                            .text(t!("page_dialog.password"))
                             .opacity(0.7),
                         PasswordBox::new()
                             .password(password.clone())
@@ -288,7 +285,7 @@ impl Launcher {
                         FileKind::Elf32 => Loader::Kitten,
                         _ => Loader::Mice,
                     };
-                    self.library.games.push(GameRecord {
+                    self.add_game(GameRecord {
                         id: make_id(),
                         path: path.display().to_string(),
                         name,
@@ -312,13 +309,13 @@ impl Launcher {
                         last_played: None,
                         added_at: now_secs(),
                     });
-                    self.store.save_library(&self.library);
                 }
             }
             Dialog::ConfirmRemove { index, .. } => {
                 if self.library.games.get(index).is_some() {
                     let g = self.library.games.remove(index);
                     self.store.remove_image(&g.id);
+                    self.store.remove_game_settings(&g);
                     self.store.save_library(&self.library);
 
                     self.drop_index = None;
@@ -339,6 +336,9 @@ impl Launcher {
 
                             "cards" => self.enter_cards(i, context),
 
+                            // Only an input problem leads to a game's settings.
+                            "game_settings" => self.open_game_settings(i, SettingsTab::Input, context),
+
                             "games" => {
                                 self.drop_index = Some(i);
                                 self.drop_open = true;
@@ -358,23 +358,24 @@ impl Launcher {
     pub(in crate::reactor_app) fn pick_companion(&self, context: &ComponentContext<Self>, kind: CompanionKind, index: usize) {
         let exe_pairs = || {
             vec![
-                (t!("可执行文件", "Executable"), "*.exe;*.elf"),
-                (t!("所有文件", "All files"), "*.*"),
+                (t!("page_dialog.executable"), "*.exe;*.elf"),
+                (t!("common.all_files"), "*.*"),
             ]
         };
         let (pairs, title) = match kind {
-            CompanionKind::ServerBox => (exe_pairs(), t!("选择 ServerBox 文件", "Select ServerBox file")),
+            CompanionKind::ServerBox => (exe_pairs(), t!("page_dialog.select_serverbox_file")),
             CompanionKind::Amdaemon => (
                 exe_pairs(),
-                t!("选择 amdaemon.exe", "Select amdaemon.exe"),
+                t!("page_dialog.select_amdaemon_exe"),
             ),
             CompanionKind::GameExe => (
                 exe_pairs(),
-                t!("选择游戏主程序（GameProject-Win64-Shipping.exe）", "Select game executable (GameProject-Win64-Shipping.exe)"),
+                t!("page_dialog.select_game_executable"),
             ),
         };
         context.spawn_background(move |_| {
-            let picked = filedialog::pick_open_file(&pairs, title);
+            let filters: Vec<(&str, &str)> = pairs.iter().map(|(label, pattern)| (label.as_ref(), *pattern)).collect();
+            let picked = filedialog::pick_open_file(&filters, &title);
             Message::CompanionPicked {
                 kind,
                 index,

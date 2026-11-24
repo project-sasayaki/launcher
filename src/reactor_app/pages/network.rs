@@ -4,8 +4,7 @@ use std::time::Duration;
 use windows_reactor::*;
 
 use crate::netinfo::{self, AdapterInfo};
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 use crate::vpn::{VpnManager, VpnStatus};
 
 use crate::reactor_app::Launcher;
@@ -33,7 +32,7 @@ impl Launcher {
     pub(in crate::reactor_app) fn save_net(&mut self) {
         if let Err(e) = self.store.save_network(&self.net) {
             self.dialog = Dialog::Error {
-                message: tf!("保存 config.ini 失败：{}", "Failed to save config.ini: {}", e),
+                message: t!("common.failed_to_save_config_ini", error = e).to_string(),
             };
         }
     }
@@ -45,21 +44,21 @@ impl Launcher {
         let adapter_idx =
             selected.and_then(|sel| self.adapters.iter().position(|a| a.guid == sel.guid));
         let adapter_placeholder = if !self.adapters_scanned {
-            t!("正在扫描网卡…", "Scanning adapters...").to_string()
+            t!("page_network.scanning_adapters").to_string()
         } else if self.adapters.is_empty() {
-            t!("没有已连接的网卡", "No connected adapter").to_string()
+            t!("page_network.no_connected_adapter").to_string()
         } else if adapter_idx.is_some() {
             String::new()
         } else if self.net.adapter.is_some() {
-            t!("之前保存的网卡当前不可用", "Previously saved adapter unavailable").to_string()
+            t!("page_network.previously_saved_adapter_unavailable").to_string()
         } else {
-            t!("选择网卡", "Select adapter").to_string()
+            t!("page_network.select_adapter").to_string()
         };
 
         let (ip_items, ip_idx, ip_enabled, ip_placeholder) = match selected {
-            None => (Vec::new(), None, false, t!("先选择网卡", "Select an adapter first").to_string()),
+            None => (Vec::new(), None, false, t!("page_network.select_adapter_first").to_string()),
             Some(a) if a.ips.is_empty() => {
-                (Vec::new(), None, false, t!("该网卡没有 IPv4 网段", "No IPv4 subnet on this adapter").to_string())
+                (Vec::new(), None, false, t!("page_network.no_ipv4_subnet_on_this").to_string())
             }
             Some(a) => {
                 let items = netinfo::subnet_labels(&a.ips);
@@ -69,9 +68,9 @@ impl Launcher {
                     .as_ref()
                     .and_then(|saved| items.iter().position(|c| c == saved));
                 let placeholder = if self.net.ip.is_some() && idx.is_none() {
-                    t!("之前保存的网段当前不可用", "Previously saved subnet unavailable").to_string()
+                    t!("page_network.previously_saved_subnet_unavailable").to_string()
                 } else {
-                    t!("选择网段", "Select subnet").to_string()
+                    t!("page_network.select_subnet").to_string()
                 };
                 (items, idx, true, placeholder)
             }
@@ -90,7 +89,7 @@ impl Launcher {
                     .children((
                     settings_row(
                         FontIcon::new().glyph("\u{E939}").into(),
-                        t!("网卡", "Network adapter"),
+                        &t!("page_network.network_adapter"),
                         ComboBox::new()
                             .width(450.0)
                             .items_source(adapter_items)
@@ -103,7 +102,7 @@ impl Launcher {
                     separator(),
                     settings_row(
                         FontIcon::new().glyph("\u{E774}").into(),
-                        t!("IP 网段", "IP subnet"),
+                        &t!("page_network.ip_subnet"),
                         ComboBox::new()
                             .width(450.0)
                             .items_source(ip_items)
@@ -117,7 +116,7 @@ impl Launcher {
                     separator(),
                     settings_row(
                         FontIcon::new().glyph("\u{E9E9}").into(),
-                        t!("模拟网络", "Simulated network"),
+                        &t!("page_network.simulated_network"),
                         settings_toggle(
                             self.net.simulate != Some(false),
                             true,
@@ -127,7 +126,7 @@ impl Launcher {
                     separator(),
                     settings_row(
                         FontIcon::new().glyph("\u{E80F}").into(),
-                        t!("主机IP", "Host IP"),
+                        &t!("page_network.host_ip"),
                         TextBox::new()
                             .width(180.0)
                             .text(self.net.host_ip.clone().unwrap_or_default())
@@ -140,7 +139,7 @@ impl Launcher {
                     separator(),
                     settings_row(
                         FontIcon::new().glyph("\u{E8D8}").into(),
-                        t!("ServerBox IP", "ServerBox IP"),
+                        &t!("page_network.serverbox_ip"),
                         TextBox::new()
                             .width(180.0)
                             .text(self.net.serverbox_ip.clone().unwrap_or_default())
@@ -167,7 +166,7 @@ impl Launcher {
                                 StackPanel::new()
                                     .grid_column(0)
                                     .children([TextBlock::new()
-                                        .text(t!("网络设置", "Network"))
+                                        .text(t!("nav.network"))
                                         .font_size(26.0)
                                         .font_weight(FontWeight::SEMI_BOLD)]),
                                 Button::new()
@@ -181,7 +180,7 @@ impl Launcher {
                                             .spacing(8.0)
                                             .children((
                                                 FontIcon::new().glyph("\u{E72C}"),
-                                                TextBlock::new().text(t!("刷新网卡", "Refresh")),
+                                                TextBlock::new().text(t!("page_network.refresh")),
                                             )),
                                     ),
                             )),
@@ -195,11 +194,11 @@ impl Launcher {
         use std::path::Path;
 
         let (status_text, sr, sg, sb) = match self.vpn_status {
-            VpnStatus::NotConfigured => (t!("未配置", "Not configured"), 0x9E, 0x9E, 0x9E),
-            VpnStatus::Disconnected => (t!("未连接", "Disconnected"), 0xFF, 0x99, 0xA4),
-            VpnStatus::Connecting => (t!("连接中…", "Connecting…"), 0x9E, 0x9E, 0x9E),
-            VpnStatus::Connected => (t!("已连接", "Connected"), 0x6C, 0xCB, 0x5F),
-            VpnStatus::Failed => (t!("连接失败", "Connection failed"), 0xFF, 0x99, 0xA4),
+            VpnStatus::NotConfigured => (t!("page_network.not_configured"), 0x9E, 0x9E, 0x9E),
+            VpnStatus::Disconnected => (t!("page_network.disconnected"), 0xFF, 0x99, 0xA4),
+            VpnStatus::Connecting => (t!("page_network.connecting"), 0x9E, 0x9E, 0x9E),
+            VpnStatus::Connected => (t!("page_network.connected"), 0x6C, 0xCB, 0x5F),
+            VpnStatus::Failed => (t!("page_network.connection_failed"), 0xFF, 0x99, 0xA4),
         };
         let cfg_name = self
             .vpn
@@ -207,7 +206,7 @@ impl Launcher {
             .as_deref()
             .and_then(|p| Path::new(p).file_name())
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| t!("未导入", "Not imported").to_string());
+            .unwrap_or_else(|| t!("page_network.not_imported").to_string());
         let connected = self.vpn_status == VpnStatus::Connected;
         let can_connect = self.vpn.config_path.is_some() && !connected;
 
@@ -215,11 +214,11 @@ impl Launcher {
             .style(ButtonStyle::Accent)
             .is_enabled(can_connect)
             .on_click(context.message(Message::VpnConnectClicked))
-            .content(t!("连接", "Connect"));
+            .content(t!("page_network.connect").to_string());
         let disconnect_btn = Button::new()
             .is_enabled(connected)
             .on_click(context.message(Message::VpnDisconnectClicked))
-            .content(t!("断开", "Disconnect"));
+            .content(t!("page_network.disconnect").to_string());
 
         let card = Border::new()
             .margin(Thickness::new(0.0, 16.0, 0.0, 0.0))
@@ -234,17 +233,17 @@ impl Launcher {
                     .children((
                     settings_row(
                         View::from(SymbolIcon::new().symbol(Symbol::MapDrive)),
-                        t!("配置文件", "Config file"),
+                        &t!("page_network.config_file"),
                         View::from(
                             Button::new()
                                 .on_click(context.message(Message::VpnImportClicked))
-                                .content(t!("导入配置…", "Import config…")),
+                                .content(t!("page_network.import_config").to_string()),
                         ),
                     ),
                     separator(),
                     settings_row(
                         View::from(SymbolIcon::new().symbol(Symbol::ProtectedDocument)),
-                        t!("当前配置", "Current config"),
+                        &t!("page_network.current_config"),
                         View::from(
                             TextBlock::new()
                                 .text(cfg_name)
@@ -255,11 +254,11 @@ impl Launcher {
                     separator(),
                     settings_row(
                         View::from(SymbolIcon::new().symbol(Symbol::Permissions)),
-                        t!("私钥密码", "Private key password"),
+                        &t!("page_network.private_key_password"),
                         View::from(
                             PasswordBox::new()
                                 .width(168.0)
-                                .placeholder_text(t!("私钥密码", "Private key password"))
+                                .placeholder_text(t!("page_network.private_key_password"))
                                 .password(self.vpn.passphrase.clone().unwrap_or_default())
                                 .on_password_changed(context.callback(Message::VpnPassphraseChanged))
                                 .vertical_alignment(VerticalAlignment::Center),
@@ -268,7 +267,7 @@ impl Launcher {
                     separator(),
                     settings_row(
                         View::from(SymbolIcon::new().symbol(Symbol::World)),
-                        t!("连接状态", "Connection status"),
+                        &t!("page_network.connection_status"),
                         View::from(
                             StackPanel::new()
                                 .orientation(Orientation::Horizontal)
@@ -292,7 +291,7 @@ impl Launcher {
             .spacing(8.0)
             .children((
                 TextBlock::new()
-                    .text(t!("VPN 设置", "VPN"))
+                    .text(t!("nav.vpn"))
                     .font_size(26.0)
                     .font_weight(FontWeight::SEMI_BOLD),
                 card,
@@ -304,7 +303,7 @@ impl Launcher {
         if self.vpn.config_path.is_none() {
             self.vpn_status = VpnStatus::NotConfigured;
             self.dialog = Dialog::Error {
-                message: t!("请先导入 VPN 配置文件", "Import a VPN config file first").to_string(),
+                message: t!("page_network.import_vpn_config_file_first").to_string(),
             };
             return;
         }

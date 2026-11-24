@@ -1,6 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rust_i18n::t;
+
+use crate::db;
+use crate::storage::GameRecord;
+
 const INI_NAME: &str = "initialD.ini";
 
 const NEWS_PORT: u16 = 8086;
@@ -29,6 +34,15 @@ fn idas_version(game_id: &str) -> Option<u8> {
     }
 }
 
+/// Rewrites `initialD.ini` in the game's folder for the server `host`, when the game is
+/// one of D4–D7 (known by the database's game id, or else the record's own).
+pub fn patch_for(record: &GameRecord, host: &str) -> Result<bool, String> {
+    let game_id = db::lookup_record(record)
+        .and_then(|m| m.game_id.clone())
+        .or_else(|| record.game_id.clone());
+    patch_game_ini(&super::game_dir_of(record), game_id.as_deref(), host)
+}
+
 pub fn patch_game_ini(game_dir: &Path, game_id: Option<&str>, host: &str) -> Result<bool, String> {
     let Some(idas) = game_id.and_then(idas_version) else {
         return Ok(false);
@@ -47,10 +61,10 @@ pub fn patch_game_ini(game_dir: &Path, game_id: Option<&str>, host: &str) -> Res
 
     let tmp = path.with_extension("ini.tmp");
     fs::write(&tmp, &out)
-        .map_err(|e| format!("写入 initialD.ini 临时文件失败（{}）：{e}", tmp.display()))?;
+        .map_err(|e| t!("initiald.write_temp_failed", path = tmp.display(), error = e).to_string())?;
     fs::rename(&tmp, &path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        format!("替换 initialD.ini 失败（{}）：{e}", path.display())
+        t!("initiald.replace_failed", path = path.display(), error = e).to_string()
     })?;
     Ok(true)
 }
@@ -311,7 +325,7 @@ mod tests {
         assert!(s.contains(
             "ADV_NEWS_SERVER_URL_0 = http://192.168.100.114:8086/idas6/news/news50.txt"
         ));
-        assert!(!s.contains(H), "不应残留默认私服地址");
+        assert!(!s.contains(H), "the default private server address should not remain");
     }
 
     #[test]

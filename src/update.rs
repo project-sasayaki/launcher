@@ -24,8 +24,7 @@ use windows::Win32::Networking::WinHttp::{
 
 use crate::i18n::{self, Lang};
 use crate::storage::{self, Settings, launcher_dir};
-use crate::t;
-use crate::tf;
+use rust_i18n::t;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum UpdateTarget {
@@ -293,7 +292,7 @@ pub fn save_cache(index: &UpdateIndex) {
     let path = storage::data_dir().join("update_cache.json");
     if let Some(dir) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            eprintln!("创建更新缓存目录失败：{e}");
+            eprintln!("failed to create the update cache folder: {e}");
         }
     }
     let mut merged = load_cache().unwrap_or_default();
@@ -311,7 +310,7 @@ pub fn save_cache(index: &UpdateIndex) {
     };
     if let Ok(s) = serde_json::to_string_pretty(&c) {
         if let Err(e) = std::fs::write(&path, s) {
-            eprintln!("写入更新缓存失败：{e}");
+            eprintln!("failed to write the update cache: {e}");
         }
     }
 }
@@ -360,7 +359,7 @@ pub fn check_one(
     let Some(r) = rel else {
         return TargetStatus {
             state: UpdateState::UpToDate,
-            detail: Some(t!("暂无更新", "No updates available").to_string()),
+            detail: Some(t!("update.no_updates_available").to_string()),
             ..Default::default()
         };
     };
@@ -455,7 +454,7 @@ fn parse_url(url: &str) -> Result<(String, u16, String, bool), String> {
     } else if let Some(r) = url.strip_prefix("http://") {
         (false, r)
     } else {
-        return Err(t!("仅支持 http/https 链接", "Only http/https URLs are supported").to_string());
+        return Err(t!("update.only_http_https_urls_are").to_string());
     };
     let (hostpart, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -466,12 +465,12 @@ fn parse_url(url: &str) -> Result<(String, u16, String, bool), String> {
             hostpart[..i].to_string(),
             hostpart[i + 1..]
                 .parse::<u16>()
-                .map_err(|_| t!("URL 端口非法", "Invalid URL port").to_string())?,
+                .map_err(|_| t!("update.invalid_url_port").to_string())?,
         ),
         None => (hostpart.to_string(), if secure { 443 } else { 80 }),
     };
     if host.is_empty() {
-        return Err(t!("URL 主机为空", "URL host is empty").to_string());
+        return Err(t!("update.url_host_is_empty").to_string());
     }
     Ok((host, port, path.to_string(), secure))
 }
@@ -528,7 +527,7 @@ where
             Some(&ipv6_fb_bytes),
         );
         if session.is_null() {
-            return Err(t!("无法初始化网络", "Failed to initialize network").to_string());
+            return Err(t!("http.failed_to_initialize").to_string());
         }
         if let Some(a) = abort {
             a.register(session);
@@ -555,7 +554,7 @@ where
             } else {
                 let _ = WinHttpCloseHandle(session);
             }
-            return Err(tf!("无法连接 {host}", "Failed to connect to {host}"));
+            return Err(t!("update.failed_to_connect_to", host = host).to_string());
         }
         if let Some(a) = abort {
             a.register(connect);
@@ -583,7 +582,7 @@ where
                 let _ = WinHttpCloseHandle(connect);
                 let _ = WinHttpCloseHandle(session);
             }
-            return Err(t!("无法创建请求", "Failed to create request").to_string());
+            return Err(t!("http.failed_to_create_request").to_string());
         }
         if let Some(a) = abort {
             a.register(request);
@@ -613,23 +612,20 @@ where
             );
             if ok == 0 {
                 let e = std::io::Error::last_os_error();
-                return Err(tf!("添加请求头失败：{e}", "Failed to add request headers: {e}").to_string());
+                return Err(t!("update.failed_to_add_request_headers", error = e).to_string());
             }
             WinHttpSendRequest(request, None, None, 0, 0, 0).map_err(|e| {
-                tf!("发送请求失败：{e}", "Failed to send request: {e}").to_string()
+                t!("http.failed_to_send_request", error = e).to_string()
             })?;
             WinHttpReceiveResponse(request, core::ptr::null_mut()).map_err(|e| {
-                tf!("接收响应失败：{e}", "Failed to receive response: {e}").to_string()
+                t!("http.failed_to_receive_response", error = e).to_string()
             })?;
             let status = query_number(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER)
                 .ok_or_else(|| {
-                    t!("无法读取状态码", "Failed to read status code").to_string()
+                    t!("update.failed_to_read_status_code").to_string()
                 })?;
             if status < 200 || status >= 300 {
-                return Err(tf!(
-                    "HTTP 状态 {status}（{url}）",
-                    "HTTP status {status} ({url})"
-                ));
+                return Err(t!("update.http_status", status = status, url = url).to_string());
             }
             let total = query_number(
                 request,
@@ -693,7 +689,7 @@ fn read_body_to_file(
     let mut written: u64 = 0;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err(t!("已取消更新", "Update cancelled").to_string());
+            return Err(t!("update.update_cancelled").to_string());
         }
         let mut avail: u32 = 0;
         if unsafe { WinHttpQueryDataAvailable(request, &mut avail) }.is_err() {
@@ -721,23 +717,20 @@ fn read_body_to_file(
         }
         buf.truncate(read as usize);
         file.write_all(&buf)
-            .map_err(|e| tf!("写入失败：{e}", "Write failed: {e}"))?;
+            .map_err(|e| t!("update.write_failed", error = e).to_string())?;
         written += read as u64;
         on_progress(written, total.unwrap_or(0));
     }
 
     if cancel.load(Ordering::Relaxed) {
-        return Err(t!("已取消更新", "Update cancelled").to_string());
+        return Err(t!("update.update_cancelled").to_string());
     }
     Ok(())
 }
 
 pub fn repo_api_url(src: &str) -> Result<String, String> {
     let err = || {
-        t!(
-            "仅支持 GitHub/GitCode 仓库地址",
-            "Only GitHub/GitCode repo URLs are supported"
-        )
+        t!("update.only_github_gitcode_repo_urls")
         .to_string()
     };
     let url = src.trim();
@@ -812,10 +805,7 @@ fn release_to_loader_for(
             });
         }
     }
-    Err(t!(
-        "Release 中没有可用资产",
-        "No usable asset found in the release"
-    )
+    Err(t!("update.no_usable_asset_found_in")
     .to_string())
 }
 
@@ -824,10 +814,10 @@ fn parse_releases(text: &str) -> Result<Vec<ReleaseInfo>, String> {
         return Ok(vec![rel]);
     }
     let mut rels: Vec<ReleaseInfo> = serde_json::from_str(text).map_err(|e| {
-        tf!("Release 解析失败：{e}", "Failed to parse release: {e}")
+        t!("update.failed_to_parse_release", error = e).to_string()
     })?;
     if rels.is_empty() {
-        return Err(t!("仓库没有可用的 Release", "The repo has no usable release").to_string());
+        return Err(t!("update.repo_has_no_usable_release").to_string());
     }
     sort_releases_newest_first(&mut rels);
     Ok(rels)
@@ -866,10 +856,7 @@ fn loader_from_candidates(
     rels: &[ReleaseInfo],
     target: UpdateTarget,
 ) -> Result<LoaderRelease, String> {
-    let mut last_err = t!(
-        "仓库没有可用的 Release",
-        "The repo has no usable release"
-    )
+    let mut last_err = t!("update.repo_has_no_usable_release")
     .to_string();
     for rel in rels {
         match release_to_loader_for(rel, target) {
@@ -883,11 +870,9 @@ fn loader_from_candidates(
 fn select_repo(target: UpdateTarget, lang: Lang) -> Option<&'static str> {
     let repos = target.default_repos();
     let pick = |host: &str| repos.iter().find(|r| r.contains(host)).copied();
-    match lang {
-        Lang::Zh => pick("gitcode.com").or_else(|| repos.first().copied()),
-        Lang::En => pick("github.com").or_else(|| repos.first().copied()),
-    }
-
+    // GitCode is the mirror that is reachable from mainland China; everyone else uses GitHub.
+    let host = if lang == Lang::Zh { "gitcode.com" } else { "github.com" };
+    pick(host).or_else(|| repos.first().copied())
 }
 
 const CHECK_DEADLINE: Duration = Duration::from_secs(15);
@@ -956,7 +941,7 @@ fn http_get_text(
         |request, _total| read_body(request, &mut body),
     )?;
     String::from_utf8(body)
-        .map_err(|_| t!("响应不是合法 UTF-8", "Response is not valid UTF-8").to_string())
+        .map_err(|_| t!("update.response_is_not_valid_utf").to_string())
 }
 
 fn http_download_to_file(
@@ -970,8 +955,13 @@ fn http_download_to_file(
     use std::sync::atomic::Ordering;
     let tmp = out.with_extension("part");
     let _ = std::fs::remove_file(&tmp);
+    // A launcher put in a new folder has no tools\ yet; the first update creates it.
+    if let Some(dir) = tmp.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| t!("update.failed_to_create_temp_file", error = e).to_string())?;
+    }
     let mut file = std::fs::File::create(&tmp)
-        .map_err(|e| tf!("创建临时文件失败：{e}", "Failed to create temp file: {e}"))?;
+        .map_err(|e| t!("update.failed_to_create_temp_file", error = e).to_string())?;
     let urls: Vec<String> = std::iter::once(primary_url.to_string())
         .chain(mirrors.iter().cloned())
         .collect();
@@ -979,7 +969,7 @@ fn http_download_to_file(
     let mut ok = false;
     for url in &urls {
         if cancel.load(Ordering::Relaxed) {
-            last_err = t!("已取消更新", "Update cancelled").to_string();
+            last_err = t!("update.update_cancelled").to_string();
             break;
         }
 
@@ -1000,13 +990,13 @@ fn http_download_to_file(
     if !ok {
         let _ = std::fs::remove_file(&tmp);
         return Err(if cancel.load(Ordering::Relaxed) {
-            t!("已取消更新", "Update cancelled").to_string()
+            t!("update.update_cancelled").to_string()
         } else {
-            tf!("下载失败：{last_err}", "Download failed: {last_err}")
+            t!("update.download_failed", error = last_err).to_string()
         });
     }
     std::fs::rename(&tmp, out)
-        .map_err(|e| tf!("重命名失败：{e}", "Rename failed: {e}"))
+        .map_err(|e| t!("update.rename_failed", error = e).to_string())
 }
 
 fn sha256_of_file(path: &Path) -> Result<String, String> {
@@ -1067,16 +1057,16 @@ fn extract_zip(
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|e| tf!("打开压缩包失败：{e}", "Failed to open archive: {e}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| t!("update.failed_to_open_archive", error = e).to_string())?;
     let total = archive.len();
     let mut done = 0u64;
     for i in 0..total {
         if cancel.load(Ordering::Relaxed) {
-            return Err(t!("已取消更新", "Update cancelled").to_string());
+            return Err(t!("update.update_cancelled").to_string());
         }
         let mut entry = archive
             .by_index(i)
-            .map_err(|e| tf!("读取条目失败：{e}", "Failed to read entry: {e}"))?;
+            .map_err(|e| t!("update.failed_to_read_entry", error = e).to_string())?;
         let name = match entry.enclosed_name() {
             Some(p) => p.to_path_buf(),
             None => continue,
@@ -1109,19 +1099,19 @@ pub fn install_zip(
     let tmp_extract = base_dir.join(format!(".__update_{}", target.dir_name()));
     let _ = std::fs::remove_dir_all(&tmp_extract);
     std::fs::create_dir_all(&tmp_extract)
-        .map_err(|e| tf!("创建临时目录失败：{e}", "Failed to create temp dir: {e}"))?;
+        .map_err(|e| t!("update.failed_to_create_temp_dir", error = e).to_string())?;
     extract_zip(zip_path, &tmp_extract, cancel, &|done, total| {
         progress(UpdatePhase::Extracting, done, total)
     })
     .map_err(|e| {
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        tf!("解压失败：{e}", "Extraction failed: {e}")
+        t!("update.extraction_failed", error = e).to_string()
     })?;
     let _ = std::fs::remove_file(zip_path);
 
     if cancel.load(Ordering::Relaxed) {
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        return Err(t!("已取消更新", "Update cancelled").to_string());
+        return Err(t!("update.update_cancelled").to_string());
     }
 
     let content_root = strip_top_dir(&tmp_extract);
@@ -1131,7 +1121,7 @@ pub fn install_zip(
     if target_dir.exists() {
         std::fs::rename(&target_dir, &backup).map_err(|e| {
             let _ = std::fs::remove_dir_all(&tmp_extract);
-            tf!("备份失败：{e}", "Backup failed: {e}")
+            t!("update.backup_failed", error = e).to_string()
         })?;
     }
 
@@ -1143,7 +1133,7 @@ pub fn install_zip(
             let _ = std::fs::rename(&backup, &target_dir);
         }
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        tf!("安装失败：{e}", "Installation failed: {e}")
+        t!("update.installation_failed", error = e).to_string()
     })?;
 
     let _ = std::fs::remove_dir_all(&backup);
@@ -1163,29 +1153,26 @@ pub fn install_launcher_zip(
     let tmp_extract = base.join(".__update_launcher");
     let _ = std::fs::remove_dir_all(&tmp_extract);
     std::fs::create_dir_all(&tmp_extract)
-        .map_err(|e| tf!("创建临时目录失败：{e}", "Failed to create temp dir: {e}"))?;
+        .map_err(|e| t!("update.failed_to_create_temp_dir", error = e).to_string())?;
     extract_zip(zip_path, &tmp_extract, cancel, &|done, total| {
         progress(UpdatePhase::Extracting, done, total)
     })
     .map_err(|e| {
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        tf!("解压失败：{e}", "Extraction failed: {e}")
+        t!("update.extraction_failed", error = e).to_string()
     })?;
     let _ = std::fs::remove_file(zip_path);
 
     if cancel.load(Ordering::Relaxed) {
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        return Err(t!("已取消更新", "Update cancelled").to_string());
+        return Err(t!("update.update_cancelled").to_string());
     }
 
     let content_root = strip_top_dir(&tmp_extract);
     let new_exe = content_root.join("launcher.exe");
     if !new_exe.is_file() {
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        return Err(t!(
-            "升级包中未找到 launcher.exe",
-            "launcher.exe not found in the update package"
-        )
+        return Err(t!("update.launcher_exe_not_found_in")
         .to_string());
     }
 
@@ -1200,9 +1187,9 @@ pub fn install_launcher_zip(
         top: bool,
         parked: &mut Vec<(PathBuf, PathBuf)>,
     ) -> Result<(), String> {
-        std::fs::create_dir_all(dst).map_err(|e| tf!("安装失败：{e}", "Installation failed: {e}"))?;
+        std::fs::create_dir_all(dst).map_err(|e| t!("update.installation_failed", error = e).to_string())?;
         for entry in std::fs::read_dir(src)
-            .map_err(|e| tf!("安装失败：{e}", "Installation failed: {e}"))?
+            .map_err(|e| t!("update.installation_failed", error = e).to_string())?
             .flatten()
         {
             let name = entry.file_name();
@@ -1218,13 +1205,13 @@ pub fn install_launcher_zip(
             } else {
                 if d.exists() {
                     std::fs::create_dir_all(park)
-                        .map_err(|e| tf!("安装失败：{e}", "Installation failed: {e}"))?;
+                        .map_err(|e| t!("update.installation_failed", error = e).to_string())?;
                     std::fs::rename(&d, &p)
-                        .map_err(|e| tf!("安装失败：{e}", "Installation failed: {e}"))?;
+                        .map_err(|e| t!("update.installation_failed", error = e).to_string())?;
                     parked.push((p, d.clone()));
                 }
                 std::fs::copy(&s, &d)
-                    .map_err(|e| tf!("安装失败：{e}", "Installation failed: {e}"))?;
+                    .map_err(|e| t!("update.installation_failed", error = e).to_string())?;
             }
         }
         Ok(())
@@ -1240,17 +1227,17 @@ pub fn install_launcher_zip(
 
     let current_exe = std::env::current_exe().map_err(|e| {
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        tf!("获取自身路径失败：{e}", "Failed to resolve own path: {e}")
+        t!("update.failed_to_resolve_own_path", error = e).to_string()
     })?;
     let park_exe = parked_dir.join("launcher.exe");
     std::fs::create_dir_all(&parked_dir)
-        .map_err(|e| tf!("安装失败：{e}", "Installation failed: {e}"))?;
+        .map_err(|e| t!("update.installation_failed", error = e).to_string())?;
     std::fs::rename(&current_exe, &park_exe).map_err(|e| {
         for (p, d) in &parked {
             let _ = std::fs::rename(p, d);
         }
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        tf!("备份失败：{e}", "Backup failed: {e}")
+        t!("update.backup_failed", error = e).to_string()
     })?;
     if let Err(e) = std::fs::rename(&new_exe, base.join("launcher.exe")) {
         for (p, d) in &parked {
@@ -1258,7 +1245,7 @@ pub fn install_launcher_zip(
         }
         let _ = std::fs::rename(&park_exe, &current_exe);
         let _ = std::fs::remove_dir_all(&tmp_extract);
-        return Err(tf!("安装失败：{e}", "Installation failed: {e}"));
+        return Err(t!("update.installation_failed", error = e).to_string());
     }
 
     let _ = std::fs::remove_dir_all(&tmp_extract);
@@ -1297,7 +1284,7 @@ pub fn install_launcher_zip(
         }
     };
     if !spawned {
-        return Err(t!("启动新版本失败", "Failed to launch the new version").to_string());
+        return Err(t!("update.failed_to_launch_new_version").to_string());
     }
 
     std::process::exit(0)
@@ -1335,16 +1322,16 @@ pub fn download_and_install(
     if cancel.load(Ordering::Relaxed) {
         let _ = std::fs::remove_dir_all(&tmp_extract);
         let _ = std::fs::remove_file(&zip_path);
-        return Err(t!("已取消更新", "Update cancelled").to_string());
+        return Err(t!("update.update_cancelled").to_string());
     }
 
     if let Some(expected) = sha256 {
         let actual = sha256_of_file(&zip_path)
-            .map_err(|e| tf!("校验计算失败：{e}", "Checksum computation failed: {e}"))?;
+            .map_err(|e| t!("update.checksum_computation_failed", error = e).to_string())?;
         if actual.to_lowercase() != expected.to_lowercase() {
             let _ = std::fs::remove_dir_all(&tmp_extract);
             let _ = std::fs::remove_file(&zip_path);
-            return Err(t!("sha256 校验失败", "SHA256 verification failed").to_string());
+            return Err(t!("update.sha256_verification_failed").to_string());
         }
     }
 
@@ -1394,7 +1381,7 @@ mod tests {
         );
 
         assert_eq!(r[&UpdateTarget::Mice].state, UpdateState::UpToDate);
-        assert_eq!(r[&UpdateTarget::Mice].detail.as_deref(), Some("暂无更新"));
+        assert_eq!(r[&UpdateTarget::Mice].detail.as_deref(), Some(&*t!("update.no_updates_available")));
 
         settings.last_kitten_version = Some("1.5.0".into());
         let r2 = check_updates(&index, &settings);
